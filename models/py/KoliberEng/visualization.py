@@ -45,26 +45,31 @@ class Visualization:
         title : plot name and file name. 
         """
         end = len(data[0])
+        
         if len(data) != len(names):
             print('list of data and names are not equal length')
             return
         
         if len(data) == 1:
             self.fig_num = self.fig_num + 1 
-            fig = plt.figure()
+            # fig = plt.figure()
+            plt.figure(self.fig_num)
             plt.plot(data[0][start:end])
             if points:
                 plt.plot(data[0][start:end], 'r.')
             plt.grid('on')
-            plt.title('Data plot'+'\n'+names[0])
-            plt.xlabel('real')
-            plt.ylabel('imag')
+            plt.title(names[0]+'\n'+'data plot')
+            plt.xlabel('x-values')
+            plt.ylabel('(y) ' + names[0])
             plt.savefig('data-plot'+names[0])
             plt.show(block=False)
+            # plt.show()
         
         else:
-            fig, ax = plt.subplots(len(data), 1)  # N by 1 subplots
-            title = ' '.join(names)
+            self.fig_num = self.fig_num + 1
+            # fig, ax = plt.subplots(len(data), 1)  # N by 1 subplots
+            fig, ax = plt.subplots(len(data), 1, num=self.fig_num, clear=True)
+            # title = ' '.join(names)
             # plt.title(title)
             for i in range(len(data)):
                 ax[i].plot(data[i])
@@ -74,8 +79,69 @@ class Visualization:
                 # ax[i].legend()
                 ax[i].set_ylabel(names[i])
             plt.show(block=False)
+            # plt.show()
         return
-    
+
+    def plot_data_xy_complex(self, x, y ):
+        #view the data in time and frequency domain
+        #calculate the frequency domain for viewing purposes
+        #N_FFT = float(len(y))
+        # N_FFT = len(y)
+        # f = np.arange(0,Fs,Fs/N_FFT)
+        # w = np.hanning(len(y))
+        # #y_f = np.fft.fft(np.multiply(y,w)) # apply a window to the input data
+        # y_f = np.fft.fft(y*w) # apply a window to the input data
+        # y_f = np.fft.fftshift(y_f)
+        # y_freqs = np.fft.fftshift(np.fft.fftfreq(N_FFT, d=1/Fs))
+        # #y_f = 10*np.log10(np.abs(y_f[0:int(N_FFT/2)]  /N_FFT))
+        # y_f = 10*np.log10(np.abs(y_f /N_FFT))
+    # fignum +=1
+    # plt.figure(fignum)
+    # plt.clf()
+    # ##plot(f/1000, abs(sig_fft), 'r.')
+    # plt.plot(hh, 'r.')
+    # plt.grid(True)
+    # plt.show()
+        #plt.figure()
+        self.fig_num = self.fig_num + 1 
+        plt.figure(self.fig_num, figsize=(6,6))
+        plt.clf()
+        plt.plot(x, y.real, 'b.')
+        plt.plot(x, y.real, 'g')
+        plt.xlabel('Sample')
+        plt.ylabel('Amp')
+        plt.title('Data plot sample vs amplitude')
+        plt.grid(True)
+        
+    #    fignum +=1
+    #    plt.figure()
+    #    plt.clf()
+        #plt.figure()
+        self.fig_num = self.fig_num + 1 
+        plt.figure(self.fig_num, figsize=(6,6))
+        plt.clf()
+        plt.plot(x, y.imag, 'r.')
+        plt.plot(x, y.imag, 'g')
+        plt.xlabel('Sample')
+        plt.ylabel('Amp')
+        plt.title('Data plot sample vs amplitude')
+        plt.grid(True)
+
+
+    def plot_data_xy(self, x, y, name='' ):
+        self.fig_num = self.fig_num + 1 
+        plt.figure(self.fig_num, figsize=(6,6))
+        plt.clf()
+        plt.plot(x, y.real, 'b.')
+        plt.plot(x, y.real, 'g')
+        plt.xlabel('Sample')
+        plt.ylabel('Amp')
+        plt.title('XY data plot'+'\n'+name)
+        # plt.title('Data plot sample vs amplitude')
+        plt.grid(True)
+
+
+
 
     def plot_data_1figure(self, data, names, start=0, points=False):
         """ 
@@ -130,7 +196,8 @@ class Visualization:
         title : plot name and file name. 
         """
         self.fig_num = self.fig_num + 1 
-        fig = plt.figure(self.fig_num)
+        # fig = 
+        plt.figure(self.fig_num)
         plt.plot(np.real(data[start:end]), np.imag(data[start:end]), 'r.')
         plt.grid('on')
         plt.title('IQ constellation plot'+'\n'+name)
@@ -173,20 +240,32 @@ class Visualization:
         plt.legend()
         plt.show(block=False)
 
-    def plot_psd(self, samples, Fs, plt_title):
+    def plot_psd(self, samples, Fs, mag,  plt_title):
         # Calculate power spectral density (frequency domain version of signal)
         psd = np.abs(np.fft.fftshift(np.fft.fft(samples))) ** 2
-        psd_dB = 10 * np.log10(psd)
+        psd = np.clip(psd, 1e-14, None)
+        
+        if mag == True: 
+            psd_dB = 20 * np.log10(psd) # samples are in magnitude
+        else:
+            psd_dB = 10 * np.log10(psd) # sampes are in power
+        
+        
         freqs = np.linspace(Fs/-2, Fs/2, len(psd))
 
         # Plot freq domain
-        plt.figure()
+        self.fig_num = self.fig_num + 1 
+        #fig = 
+        plt.figure(self.fig_num)
+        # plt.figure()
         plt.plot(freqs, psd_dB)
+        plt.plot(freqs, psd_dB, 'r.' )
         plt.xlabel("Frequency [MHz]")
         plt.ylabel("PSD")
         plt.grid('on')
         plt.title(plt_title)
         plt.show(block=False)
+        #plt.show()
 
     # def plot_iq_psd(self, x, fs, name):
     #     zoom_len = int(len(x)/10)

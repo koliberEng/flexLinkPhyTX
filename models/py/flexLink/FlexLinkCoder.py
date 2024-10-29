@@ -57,9 +57,9 @@ class CCrcProcessor():
     """
     # Length 8 CRC used in different standards 
     # See https://en.wikipedia.org/wiki/Cyclic_redundancy_check for more sequences 
-    Generator08_LTE       = np.array([1, 1,0,0,1, 1,0,1,1], np.uint8)
-    Generator08_Bluetooth = np.array([1, 1,0,1,0, 0,1,1,1], np.uint8)
-    Generator08_GSM       = np.array([1, 0,1,0,0, 1,0,0,1], np.uint8)
+    Generator08_LTE       = np.array([1, 1,0,0,1, 1,0,1,1], np.uint16)
+    Generator08_Bluetooth = np.array([1, 1,0,1,0, 0,1,1,1], np.uint16)
+    Generator08_GSM       = np.array([1, 0,1,0,0, 1,0,0,1], np.uint16)
 
     # Length 10 CRC  
     Generator10_GSM       = np.array([1, 0,1, 0,1,1,1, 0,1,0,1])   # 0x175
@@ -69,11 +69,11 @@ class CCrcProcessor():
     Generator12_UMTS      = np.array([1, 1,0,0,0, 0,0,0,0, 1,1,1,1])
     
     # Length 16 is used to protect the signal field (LTE gcrc16)
-    Generator16_LTE       = np.array([1,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,1], dtype = np.uint8)
+    Generator16_LTE       = np.array([1,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,1], dtype = np.uint16)
 
     # Length 24 is used to protect each transport block in the payload (LTE gcrc24a)
-    Generator24_LTEA      = np.array([1,1,0,0,0,0,1,1,0,0,1,0,0,1,1,0,0,1,1,1,1,1,0,1,1], dtype = np.uint8)
-    Generator24_LTEB      = np.array([1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,1,1], dtype = np.uint8)
+    Generator24_LTEA      = np.array([1,1,0,0,0,0,1,1,0,0,1,0,0,1,1,0,0,1,1,1,1,1,0,1,1], dtype = np.uint16)
+    Generator24_LTEB      = np.array([1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,1,1], dtype = np.uint16)
 
 
     # -------------------------------------------------
@@ -89,16 +89,16 @@ class CCrcProcessor():
         assert all([( x == 1 or x == 0)  for x in InputBitVector]),    'The InputBitVector must be binary'
 
         if isinstance(InputBitVector, list):
-            InputBitVector = np.array(InputBitVector, dtype = np.uint8)
+            InputBitVector = np.array(InputBitVector, dtype = np.uint16)
         else:
             assert isinstance(InputBitVector, np.ndarray), 'The InputBitVector must be either a list or of type np.ndarray'
-            InputBitVector = InputBitVector.astype(np.uint8)
+            InputBitVector = InputBitVector.astype(np.uint16)
 
         # -----------------------------------------------------
         # Compute the cyclic redundancy check
         GeneratorSize = len(GeneratorFunction)-1
         
-        TempMessage = np.hstack([InputBitVector, np.zeros(GeneratorSize, dtype = np.uint8)])
+        TempMessage = np.hstack([InputBitVector, np.zeros(GeneratorSize, dtype = np.uint16)])
         for Index in range(0, len(InputBitVector)):
             Range = np.arange(Index, Index + GeneratorSize+1, 1, dtype = np.int32)
             if TempMessage[Index] == 1:
@@ -130,7 +130,7 @@ class CLinearFeedbackShiftRegister():
     # i.e.: A tap configuration of [1, 0, 1, 0, 0] => x^5 + x^3 + 1
     #
     # Which looks as follows:
-    #           0   1   2   3   4     <- Shift Register index when implemented as np.zeros(Length, np.uint8)
+    #           0   1   2   3   4     <- Shift Register index when implemented as np.zeros(Length, np.uint16)
     #           1   2   3   4   5     <- Connection Positions as shown in the tap configuration
     #          ___ ___ ___ ___ ___
     #      -> |___|___|___|___|___|
@@ -180,11 +180,11 @@ class CLinearFeedbackShiftRegister():
             self.TapConfiguration = IndexOrTapConfig
 
         
-        self.ShiftRegister = np.zeros(len(self.TapConfiguration), np.uint8)
+        self.ShiftRegister = np.zeros(len(self.TapConfiguration), np.uint16)
 
         # The tap configuration is a list of bits. We need a connection mask such that
         # OutputBit = np.sum(self.ShiftRegister * ConnectionMask) % 2
-        self.ConnectionMask = np.flipud(np.array(self.TapConfiguration, np.uint8))
+        self.ConnectionMask = np.flipud(np.array(self.TapConfiguration, np.uint16))
 
         self.IsInitialized = False
 
@@ -203,7 +203,7 @@ class CLinearFeedbackShiftRegister():
         assert len(BitList) == len(self.ShiftRegister),                           'Initialization vector is not of right length'
 
         for Index in range(0, len(BitList)):
-            self.ShiftRegister[Index] = np.uint8(BitList[Index])
+            self.ShiftRegister[Index] = np.uint16(BitList[Index])
 
         self.IsInitialized = True
 
@@ -220,7 +220,7 @@ class CLinearFeedbackShiftRegister():
         assert NumberOutputBits > 0,              'The NumberOutputBits argument must be larger than 0'
         assert self.IsInitialized,                'The shift register is not initialized'
 
-        Output = np.zeros(NumberOutputBits, np.uint8)
+        Output = np.zeros(NumberOutputBits, np.uint16)
 
         for Index in range(0, NumberOutputBits):
             # Compute bit and store in output
@@ -240,9 +240,23 @@ class CLinearFeedbackShiftRegister():
 
 
 
-# ------------------------------------------------------------------
-# > CLdpcProcessor Class
-# ------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------------------------- #
+#                                                                                                   #
+#                                                                                                   #
+# > CLdpcProcessor Class                                                                            #
+#                                                                                                   #
+#                                                                                                   #
+# ------------------------------------------------------------------------------------------------- #
 class CLdpcProcessor():
     """
     brief: This class provides LDPC encoding and decoding services for the FlexLink Specification 
@@ -404,7 +418,7 @@ class CLdpcProcessor():
 
         # Build the parity check matrix, H
         Rows, Columns = PrototypeMatrix.shape
-        H = np.zeros([Rows * SubmatrixSize, Columns * SubmatrixSize], dtype = np.uint8)
+        H = np.zeros([Rows * SubmatrixSize, Columns * SubmatrixSize], dtype = np.uint16)
 
         for row in range(0, Rows):
             for column in range(0, Columns):
@@ -415,7 +429,7 @@ class CLdpcProcessor():
                     continue
 
                 # Create the eye matrix and cyclically shift it
-                Eye        = np.eye(SubmatrixSize, dtype = np.uint8)
+                Eye        = np.eye(SubmatrixSize, dtype = np.uint16)
                 EyeShifted = np.roll(Eye, iCyclicShift, axis = 1)   # Cyclic shift of each row
 
                 # Figure out the row/column ranges inside the H matrix where we want to insert the Eye matrix
@@ -559,7 +573,7 @@ class CLdpcProcessor():
     # ----------------------------------------------------------------------------
     def __init__(self
                , strMode:          str = 'WLAN'                         # 'WLAN' or 'CUSTOM'
-               , H_Custom:         np.ndarray = np.array([0], np.uint8)       
+               , H_Custom:         np.ndarray = np.array([0], np.uint16)       
                , OutputBlockSize:  int = 648
                , strRate:          str = '1/2') -> np.ndarray:
 
@@ -725,7 +739,7 @@ class CLdpcProcessor():
         # ---------------------------------------
         # Find the number of LDPC decoding operations are necessary for the entire input belief vector
         NumLdpcRepetitions = int(len(InputBeliefs) / self.NumEncodedBits)
-        RxBitEstimates     = np.zeros(NumLdpcRepetitions * self.NumMessageBits, np.uint8)
+        RxBitEstimates     = np.zeros(NumLdpcRepetitions * self.NumMessageBits, np.uint16)
 
         # Iterate through each Ldpc Process
         for Repetition in range(0, NumLdpcRepetitions):
@@ -771,7 +785,7 @@ class CLdpcProcessor():
             RxBitEstimates[StartIndexMessage:StartIndexMessage + self.NumMessageBits] = 0.5 * (np.sign(CurrentBeliefs[0:self.K]) + 1)
 
         # Recast to a reasonable type
-        RxBitEstimates = RxBitEstimates.astype(np.uint8)
+        RxBitEstimates = RxBitEstimates.astype(np.uint16)
         return RxBitEstimates
 
 
@@ -801,9 +815,19 @@ class CLdpcProcessor():
 
 
 
-# ------------------------------------------------------------------
-# > CPolarProcessor Class
-# ------------------------------------------------------------------
+
+
+
+
+
+
+# ------------------------------------------------------------------------------------------------- #
+#                                                                                                   #
+#                                                                                                   #
+# > CPolarProcessor Class                                                                           #
+#                                                                                                   #
+#                                                                                                   #
+# ------------------------------------------------------------------------------------------------- #
 class CPolarProcessor():
     """
     brief: This class provides polar encoding and decoding services for the FlexLink Specification 
@@ -879,7 +903,7 @@ class CPolarProcessor():
         NumberOfStages = int(np.log10(N) / np.log10(2))
         
         # The matrix, M, shows the progression of the input bits through the Polar structure.
-        M = np.zeros([N, NumberOfStages + 1], np.uint8)
+        M = np.zeros([N, NumberOfStages + 1], np.uint16)
         M[:, 0] = InputVector;                               # Load input vector into first column 
         
         # The Polar Encoding Process
@@ -1064,7 +1088,7 @@ class CPolarProcessor():
         # 3 - Re-encoding has been done
         NodeStateList = []
         for StageIndex in range(1, NumberOfStages + 1):
-            NodeStateList.append(np.zeros(2**(NumberOfStages - StageIndex), np.uint8))
+            NodeStateList.append(np.zeros(2**(NumberOfStages - StageIndex), np.uint16))
 
         # Define the belief matrix L and place the received beliefs into the right-most column
         L       = np.zeros([N, NumberOfStages + 1], np.float32)
@@ -1174,6 +1198,343 @@ class CPolarProcessor():
                 Debugging(NodeStateList, L, B)
 
         return B[:, 0]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------------------------- #
+#                                                                                                   #
+#                                                                                                   #
+# > Binary Convolutional Encoding Class                                                             #
+#                                                                                                   #
+#                                                                                                   #
+# ------------------------------------------------------------------------------------------------- #
+class CBinaryConvolutionalCoder():
+    '''
+    brief: This class provides binary convolutional encoding services for the FlexLink Specification   
+    '''
+    def __init__(self
+                , GeneratorPolynomialsOct:   list                    # For LTE -> [133, 171, 165]  (Octal representation)
+                , bTailBiting:               bool     = False        # False - Needs padding zeros at end of message / True - No padding zeros
+                , strMode:                   str      = 'SoftNonInverting') -> np.ndarray:
+                                            # 0/1 = hard -> 0/1, softnoninverting -> -1/+1, softinverting -> +1/-1
+        # ---------------------
+        # Error checking
+        # ---------------------
+        assert isinstance(GeneratorPolynomialsOct, list),   'The GeneratorPolynomialsOct input argument must be a list.'
+        for Polynomial in GeneratorPolynomialsOct:
+            assert isinstance(Polynomial, str),             'The GeneratorPolynomialsOct input argument must be a list of integers.'
+        assert isinstance(bTailBiting, bool),               'The bTailBiting input argument must be a boolean.'
+        assert isinstance(strMode, str),                    'The strMode input argument must be a string.'
+        assert strMode.lower() == 'hard' or strMode.lower() == 'softnoninverting' or strMode.lower() == 'softinverting', \
+                                                            'The strMode input argument is invalid.'
+
+        # Save off the member variables
+        self.bTailBiting = bTailBiting
+        self.strMode     = strMode
+
+        # ---------------------
+        # Set the class variables
+        # ---------------------
+        self.GeneratorPolynomialsBin  = []
+        self.ConstraintLength         = 0
+
+        # Translate the octal polynomials into binary vectors - The constraint length is inherent in the binary polynomial form.
+        # The constraint length is the maximum bit length of the binary polynomial vectors, which is 7 in the example below.
+        # i.e. 133oct -> 1'011'011, 171oct -> 1'111'001, 164oct -> 1'110'100
+        # Had we used 133oct, 71oct, 64oct, the constraint length would still be 7 as the 133oct is still 7 bits in length.
+        GeneratorPolynomialsBinTemp   = []
+        ConstraintLength = 0
+        for Polynomial in GeneratorPolynomialsOct:
+            BinaryString = "{0:b}".format(int(Polynomial, 8))
+            BinaryVector = [np.int8(d) for d in BinaryString]
+            if len(BinaryVector) > ConstraintLength:
+                ConstraintLength = len(BinaryVector)
+            GeneratorPolynomialsBinTemp.append(BinaryVector)
+
+        # It is possible that the binary vectors are of different lengths, as would have been the case for 133oct, 71oct, 64oct.
+        # We need to determine the constraint length and ensure that all binary vectors are of that length.
+        for BinaryVector in GeneratorPolynomialsBinTemp:
+            if len(BinaryVector) < ConstraintLength:
+                NumMissingZeros = ConstraintLength - len(BinaryVector)
+                BinaryVector    = [0]*NumMissingZeros + BinaryVector
+
+            self.GeneratorPolynomialsBin.append(BinaryVector)
+
+        self.ConstraintLength = len(self.GeneratorPolynomialsBin[0])
+
+
+
+
+
+    # --------------------------------------------------------------
+    # > EncodeBits()
+    # --------------------------------------------------------------
+    def EncodeBits(self
+                 , InputBits:   np.ndarray) -> np.ndarray:
+        '''
+        brief: This method encodes the input bits using the binary convolutional encoder
+        '''
+        # ---------------------
+        # Error checking
+        # ---------------------
+        assert isinstance(InputBits, np.ndarray),           'The InputBits input argument must be a numpy array.'
+        assert np.issubdtype(InputBits.dtype, np.integer),  'The InputBits input argument must be an integer array.'
+        assert len(InputBits.shape) == 1,                   'The InputBits input argument must be a one dimensional array.'
+        
+        # ---------------------
+        # Is the convolutional encoder tail biting?
+        # ---------------------
+        if self.bTailBiting == True:
+            # The initial state of the shift register must be equal to the final projected state
+            Reg = np.flipud(InputBits[-self.ConstraintLength + 1:]).astype(np.int8)    # Switch to np.int8 to avoid overflow later on
+        else:
+            # The initial state of the shift register is all zeros
+            Reg = np.zeros(self.ConstraintLength - 1, np.uint8).astype(np.int8)        # Switch to np.int8 to avoid overflow later on
+
+
+        # ---------------------
+        # Run the Encoder
+        # ---------------------
+        NumOutputBitsPerInputBit = len(self.GeneratorPolynomialsBin) 
+        Output                   = np.zeros(len(InputBits)*len(self.GeneratorPolynomialsBin), np.int8)
+        
+        InputVector = np.zeros(self.ConstraintLength, np.int8)
+        for Index in range(0, len(InputBits)):
+            # Get the input bit and place it properly  
+            InputBit        = InputBits[Index]
+            InputVector[0]  = InputBit
+            InputVector[1:] = Reg
+            # Compute the output bits
+            for PolynomialIndex, Polynomial in enumerate(self.GeneratorPolynomialsBin):
+                # Compute the output bit
+                OutputBit  = np.remainder(np.sum(InputVector * Polynomial), 2)
+                # Store the output bit
+                Output[Index*NumOutputBitsPerInputBit + PolynomialIndex] = OutputBit
+
+            # Update the shift register
+            Reg = np.roll(InputVector, 1)[1:]
+
+
+        # ---------------------
+        # Return the encoded bits
+        # ---------------------
+        if self.strMode.lower() == 'softnoninverting':
+            Output = 2*Output - 1
+        
+        if self.strMode.lower() == 'softinverting':
+            Output = 1 - 2*Output
+            
+        return Output
+
+
+
+
+
+
+    # --------------------------------------------------------------
+    # > Viterbi Decoder()
+    # --------------------------------------------------------------
+    def ViterbiDecoder(self
+                     , EncodedBits: np.array)-> np.array:
+        '''
+        This function executes the Viterbi decoder to recover the convolutionally encoded message bits
+        '''
+        # -------------------------------------
+        # > Error checking
+        # -------------------------------------
+        assert isinstance(EncodedBits, np.ndarray),            'The EncodedBits argument must be an np.array'
+        assert np.issubdtype(EncodedBits.dtype, np.floating) \
+            or np.issubdtype(EncodedBits.dtype, np.integer),   'The EncodedBits must be numeric in nature'
+
+        # -------------------------------------
+        # > Convert the EncodedSoftBits to SoftNonInverting in case they are not formated as such
+        # -------------------------------------
+        if   self.strMode.lower() == 'softinverting': # Convert from hard to non-inverting softbits (+1/-1 -> -1/+1)
+            InputBeliefs = -EncodedBits
+        elif self.strMode.lower() == 'hard':
+            InputBeliefs = 2*EncodedBits - 1        # Convert from hard to non-inverting softbits (0/1 -> -1/+1)
+        else:
+            InputBeliefs = EncodedBits.copy()
+
+        # In case of Tail biting, we do twice the work, but avoid transmission of zero pads, which would guarantee
+        # a final state of 0 in the decoder.
+        if self.bTailBiting == True:
+            InputBeliefs = np.hstack([InputBeliefs, InputBeliefs])
+
+        # ------------------------------------
+        # > Setup the Viterbi Decoder
+        # ------------------------------------
+        NumberOfStates           = 2 ** (self.ConstraintLength -1)
+        NumOutputBitsPerInputBit = len(self.GeneratorPolynomialsBin)
+
+        # Build two matrices each featuring dimensions NumberOfStates by NumOutputBItsPerInputBit
+        # The first matrix holds the encoder output for state i with input bit = 0.
+        # The second matrix holds the encoder output for state i with input bit = 1.
+        # We pre-build these matrices for speed so that during the Viterbi loop we don't have to keep recalculating the same values.
+        EncoderOutputForInput0 = np.zeros([NumberOfStates, NumOutputBitsPerInputBit], np.float32)
+        EncoderOutputForInput1 = np.zeros([NumberOfStates, NumOutputBitsPerInputBit], np.float32)
+        for State in range(0, NumberOfStates):
+            strStateBinary = (bin(State)[2:]).zfill(self.ConstraintLength-1)
+            BinaryList     = [int(d) for d in strStateBinary]
+            BinaryVector0  = np.array([0] + BinaryList, np.int8)
+            BinaryVector1  = np.array([1] + BinaryList, np.int8)
+            for BitIndex in range(NumOutputBitsPerInputBit):
+                # The *2 - 1 factor converts to noninverting softbits
+                EncoderOutputForInput0[State, BitIndex] = (np.sum(BinaryVector0 * self.GeneratorPolynomialsBin[BitIndex]) % 2) * 2 - 1
+                EncoderOutputForInput1[State, BitIndex] = (np.sum(BinaryVector1 * self.GeneratorPolynomialsBin[BitIndex]) % 2) * 2 - 1
+
+        # Build the traceback matrix
+        NumDecoderOutputBits = int(len(EncodedBits) / NumOutputBitsPerInputBit)
+        DecodedBits          = np.zeros(NumDecoderOutputBits, np.uint8)
+        TraceBackUnit        = np.zeros([NumberOfStates, NumDecoderOutputBits], np.int8)
+
+        # Define the PathMetric Array. The path with the largest path metric is the winner. The Viterbi
+        # decoder always assumes that the encoder (at the transmitter) started in state 0. For Tail biting
+        # mode, this is not true. We will find a work around for this mode.
+        PathMetricArray       = -1000*np.ones(NumberOfStates, np.float32)
+        PathMetricArray[0]    = 0                                    #  We favor state 0 (the first element in the vector)
+        PathMetricCopy        = PathMetricArray.copy()               #  We need a copy of the array for update purposes
+        PathMetricMatrix      = np.zeros([NumberOfStates, NumDecoderOutputBits + 1], np.float32); # For debugging purposes only.
+        PathMetricMatrix[:,0] = PathMetricArray                      # It's nice to see how the path metrics progress in time.
+
+        # --------------------------------------
+        # > Run the Viterbi Decoder
+        # --------------------------------------
+        # The outer loop
+        for OutputBitIndex in range(0, NumDecoderOutputBits):
+            # Grab a set of output bits from the InputBeliefs
+            StartIndex   = OutputBitIndex * NumOutputBitsPerInputBit
+            StopIndex    = StartIndex + NumOutputBitsPerInputBit
+            ReceivedBits = InputBeliefs[StartIndex : StopIndex]
+
+            # Run through each state (The inner loop)
+            for StateAsInteger in range(0, int(NumberOfStates/2)):
+                # We will process two states per loop interation. StateA and StateB
+                # No matter what the previous state before StateA was, it's input bit was a 0.
+                StateA_AsInteger = StateAsInteger
+                # No matter what the previous state before StateB was, it's input bit was a 1.
+                StateB_AsInteger = StateA_AsInteger + int(NumberOfStates/2)
+
+                # StateA and StateB can only be reached from two previous states. What are they?
+                PreviousLowerStateAsInteger = 2 * StateAsInteger
+                PreviousUpperStateAsInteger = 2 * StateAsInteger + 1
+
+                # ---------------------------
+                # > Compute branch and path metrics for StateA
+                # ---------------------------
+                #   Let's first find the encoder outputs generated during the transition from these two previous states to StateA.
+                #   Remember, because StateAAsInt is always < NumberOfStates/2, the input bit to get to StateA must have been a 0.
+                EncoderOutputFromLowerState = EncoderOutputForInput0[PreviousLowerStateAsInteger, :]
+                EncoderOutputFromUpperState = EncoderOutputForInput0[PreviousUpperStateAsInteger, :]
+
+                # The new path metric = old path metric + branch metric
+                BranchMetricLower  = np.sum(ReceivedBits * EncoderOutputFromLowerState)
+                BranchMetricUpper  = np.sum(ReceivedBits * EncoderOutputFromUpperState)
+                NewPathMetricLower = PathMetricArray[PreviousLowerStateAsInteger] + BranchMetricLower
+                NewPathMetricUpper = PathMetricArray[PreviousUpperStateAsInteger] + BranchMetricUpper
+
+                #print([BranchMetricLower, BranchMetricUpper, NewPathMetricLower, NewPathMetricUpper, PreviousLowerStateAsInteger, PreviousUpperStateAsInteger])
+
+                # And the survivor is???
+                if NewPathMetricLower >= NewPathMetricUpper:
+                    SurvivorPathMetric             = NewPathMetricLower
+                    SurvivorPreviousStateAsInteger = PreviousLowerStateAsInteger
+                else:
+                    SurvivorPathMetric             = NewPathMetricUpper
+                    SurvivorPreviousStateAsInteger = PreviousUpperStateAsInteger
+
+                TraceBackUnit[StateA_AsInteger, OutputBitIndex] = SurvivorPreviousStateAsInteger
+                PathMetricCopy[StateA_AsInteger]                = SurvivorPathMetric
+
+
+                # ---------------------------
+                # > Compute branch and path metrics for StateB
+                # ---------------------------
+                #   Let's first find the encoder outputs generated during the transition from these two previous states to StateB.
+                #   Remember, because StateBAsInt is always >= NumberOfStates/2, the input bit to get to StateB must have been a 1.
+                EncoderOutputFromLowerState = EncoderOutputForInput1[PreviousLowerStateAsInteger, :]
+                EncoderOutputFromUpperState = EncoderOutputForInput1[PreviousUpperStateAsInteger, :]
+
+                # The new path metric = old path metric + branch metric
+                BranchMetricLower  = np.sum(ReceivedBits * EncoderOutputFromLowerState)
+                BranchMetricUpper  = np.sum(ReceivedBits * EncoderOutputFromUpperState)
+                NewPathMetricLower = PathMetricArray[PreviousLowerStateAsInteger] + BranchMetricLower
+                NewPathMetricUpper = PathMetricArray[PreviousUpperStateAsInteger] + BranchMetricUpper
+
+                #print([BranchMetricLower, BranchMetricUpper, NewPathMetricLower, NewPathMetricUpper, PreviousLowerStateAsInteger, PreviousUpperStateAsInteger])
+
+                # And the survivor is???
+                if NewPathMetricLower >= NewPathMetricUpper:
+                    SurvivorPathMetric             = NewPathMetricLower
+                    SurvivorPreviousStateAsInteger = PreviousLowerStateAsInteger
+                else:
+                    SurvivorPathMetric             = NewPathMetricUpper
+                    SurvivorPreviousStateAsInteger = PreviousUpperStateAsInteger
+
+                TraceBackUnit[StateB_AsInteger, OutputBitIndex] = SurvivorPreviousStateAsInteger
+                PathMetricCopy[StateB_AsInteger]                = SurvivorPathMetric
+
+            # Copy the updated path metrics into the original array
+            PathMetricArray = PathMetricCopy.copy()
+            PathMetricMatrix[:, OutputBitIndex + 1] = PathMetricArray
+
+        # -------------------------------
+        # > Work your way backwards through the trace back unit
+        # -------------------------------
+        # If the transmitted bit stream has padding bits that forced the encoder into the zero state
+        # then we know to start the trace back from state 0. If we don't know what the finat state was, 
+        # then begin the traceback from the state with the largest (best) path metric.
+        FinalStateAsInteger = 0
+        if self.bTailBiting == True:
+            FinalStateAsInteger = np.argmax(PathMetricArray)
+
+        # Start the traceback
+        CurrentStateAsInteger = FinalStateAsInteger
+        for CurrentOutputBitIndex in range(NumDecoderOutputBits-1,-1,-1):   # Decrement from NumberDecoderOutputBits -1 to 0
+            if CurrentStateAsInteger < int(NumberOfStates / 2):
+                LastBitEnteringEncoder = 0
+            else:
+                LastBitEnteringEncoder = 1
+
+            DecodedBits[CurrentOutputBitIndex] = LastBitEnteringEncoder
+
+            # The CurrentStateAsInteger is now the previous state as indicated by the trace back unit
+            CurrentStateAsInteger = TraceBackUnit[CurrentStateAsInteger, CurrentOutputBitIndex]
+
+        return DecodedBits
+
+
+
+
+
+
 
 
 
@@ -1427,7 +1788,7 @@ if __name__ == '__main__':
             G = CLdpcProcessor.ComputeGeneratorMatrix(H) 
 
             NumBits = 324
-            InputBits = np.random.randint(low=0, high = 2, size = (1, NumBits), dtype = np.uint8)
+            InputBits = np.random.randint(low=0, high = 2, size = (1, NumBits), dtype = np.uint16)
             EncodedBits = LdpcProcessor.EncodeBits(InputBits, 'hard', True)
             Stop = 1
 
@@ -1459,7 +1820,7 @@ if __name__ == '__main__':
                                                 , NumberIterations = 10
                                                 , strSoftbitMapping = 'non-inverting') 
 
-            ProperAnswer = np.array([1, 0, 1, 0, 1, 0, 1], np.uint8)
+            ProperAnswer = np.array([1, 0, 1, 0, 1, 0, 1], np.uint16)
             assert all(OutputBits == ProperAnswer), 'Test 5 has failed'
             print('Test 5 has passed.')
 
@@ -1470,7 +1831,7 @@ if __name__ == '__main__':
             NumInputBits      = 324 * 100
             strBitMode        = 'non-inverting'
             bAllowZeroPadding = False
-            InputBits         = np.random.randint(low = 0, high = 2, size = NumInputBits, dtype = np.uint8)
+            InputBits         = np.random.randint(low = 0, high = 2, size = NumInputBits, dtype = np.uint16)
 
             SnrdB_List         = [0, 1, 2, 3, 4]
             NumEncodedBitsList = [648, 1296, 1944] 
@@ -1729,5 +2090,57 @@ if __name__ == '__main__':
         FEC_Mode   = 1
         CBS_A_Flag = 1
         InterleavingIndices = Interleaver(FEC_Mode, CBS_A_Flag)
+
+        Stop = 1
+
+
+
+    # -------------------------------------------
+    # Verifying the BinaryConvolutionalCoder
+    # -------------------------------------------
+    if True:
+        ConstraintLength        = 7
+        GeneratorPolynomialsOct = ['133', '171', '165']
+        ModeString              = 'softnoninverting'
+        TailBitingFlag          = True
+
+        ConvolutionalCoder = CBinaryConvolutionalCoder(GeneratorPolynomialsOct, TailBitingFlag, ModeString)
+
+        #InputBits    = np.array([1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0], np.int8)
+        #InputBits   = np.array([0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0], np.uint8)
+
+        # Number of Input bits
+        NumBits = 10000
+        InputBits    = np.random.randint(0, 2, NumBits, np.uint8)
+
+        bTailBiting = False
+        strMode     = 'hard'
+
+        # Convolutionally encode the input bits
+        EncodedBits = ConvolutionalCoder.EncodeBits(InputBits)
+
+        # Set up a loop to determine the BER
+        SnrList_dB = np.arange(0, 10, 1, np.int32)
+
+        np.random.seed(19680801)
+        NormalNoise = np.random.randn(len(EncodedBits))    # Gaussian noise with unity variance
+
+        for SnrdB in SnrList_dB:
+            # Viterbi decode the received bits
+            SnrLinear  = 10**(SnrdB/10)
+            NoisePower = 1 / SnrLinear 
+
+            DecodedBits = ConvolutionalCoder.ViterbiDecoder(EncodedBits + NormalNoise * np.sqrt(NoisePower) * NormalNoise) 
+
+            NumErrors   = np.sum( (InputBits + DecodedBits) % 2)
+
+            BER = NumErrors / len(DecodedBits)
+
+            print('BER at ' + str(SnrdB) + 'dB SINR = ' + str(BER))
+
+        if NumErrors == 0:
+            print('The test has passed.')
+        else:
+            print('The test has failed.')
 
         Stop = 1

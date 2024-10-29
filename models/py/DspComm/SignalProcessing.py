@@ -13,13 +13,17 @@
 #           8. FilterFrequency()             - Frequency domain filtering algorithm
 #           9. ComputeFirFrequencyResponse() - Computes and shows the frequency response given a sample rate and an array of FIR filters.
 #          10. Resample()                    - Resamples the waveform using spline interpolation from one sample rate to another
+#          11. GeneratePhaseNoise()          - Generates phase noise for a given phase noise profile
+#          12. ComputeChannelResponseA()     - Computes the frequency response of a multipath channel with doppler across a bandwidth at a certain time
+#          13  ComputeChannelResponseB()     - Computes the frequency response of a multipath channel at a [time, frequency] array and adds noise
+#          14. Cubic1DInterpolation()        - Compute the cubic spline interpolation as we were used to it in MatLab
 
 
 __title__     = "SignalProcessing"
 __author__    = "Andreas Schwarzinger"
-__version__   = "1.0.0"
+__version__   = "1.1.0"
 __status__    = "released"
-__date__      = "May, 23rd, 2023"
+__date__      = "June, 22rd, 2023"
 __copyright__ = 'Andreas Schwarzinger'
 
 import os
@@ -27,7 +31,7 @@ import sys
 import numpy             as np
 import matplotlib.pyplot as plt
 import math
-from   scipy             import interpolate    
+from   scipy             import interpolate  
 import time
 
 ThisDirectory = os.path.dirname(__file__)
@@ -645,7 +649,7 @@ def ComputeCorrelation(   domain:        str
         plt.figure()
         plt.plot(np.arange(0, len(Correlation), 1), Correlation.real,    'r')
         plt.plot(np.arange(0, len(Correlation), 1), Correlation.imag,    'b')
-        plt.plot(np.arange(0, len(Correlation), 1), np.abs(Correlation), 'k')
+        plt.plot(np.arange(0, len(Correlation), 1), np.abs(Correlation), 'g')
         plt.title('Sliding Correlation Result')
         plt.grid(color='#999999') 
         plt.show()
@@ -859,7 +863,7 @@ def Resample(InputSequence:        np.ndarray
            , SourceSampleRate:     float
            , TargetSampleRate:     float
            , StartTimeFirstSample: float
-           , bPlot:                bool) -> np.ndarray:
+           , bPlot:                bool) -> tuple:
     '''
     brief:  The following function resamples a numpy array of real or complex values from one sample rate to another.
     :    :  This function uses cubic spline interpolation via the scipy import module
@@ -932,11 +936,371 @@ def Resample(InputSequence:        np.ndarray
     else:
         assert False, "Invalid InputSequence type."
 
-    return OutputSequence
+    return (OutputSequence, TargetTime)
 
 
 
 
+
+
+
+
+# ------------------------------------------------------------------------------------------------------------ #
+#                                                                                                              #
+# > 11. GeneratePhaseNoise()                                                                                   #
+#                                                                                                              #
+# ------------------------------------------------------------------------------------------------------------ #
+def GeneratePhaseNoise(dBc                                   # Attenuation portion of the Phase noise profile
+                     , Frequencies                           # Frequency portion of the Phase noise profile
+                     , SampleRate                            # The sample rate of the output phase noise signal and corresponding IQ waveform
+                     , NumberOfSamples                       # The number of samples in the output IQ output waveform (If the IQ waveform is desired)
+                     , bRmsPhaseNoiseOnly = False) -> tuple: # If True, only the rms phase noise is returned
+                                                             # Else, the following tuple is returned: (FinalPhaseNoise,     --> The phase noise waveform in radians
+                                                             #                                         IqOutput,            --> The IQ waveform that will introduce the phase noise
+                                                             #                                         RMS_PhaseNoiseError) --> The rms phase noise error in radians
+    '''
+    This function produces will produce:
+    --> FinalPhaseNoise,     which is a time waveform representing the phase deviation in radians as a function of discrete time.
+    --> IqOutput,            which is corresponding the IQ waveform that will introduce the phase noise when multiplied by a perfect IQ sequence.
+    --> RMS_PhaseNoiseError, which is the integrated rms phase noise error in radians. 
+    The phase noise is specified:
+    --> dBc, which is the attenuation of the phase noise profile in dBc at the frequencies provided in the Frequencies input vector
+    --> Frequencies, which is the frequency vector in Hz at which the phase noise profile is specified.
+     
+    The method of generating phase noise can be seen in the book:
+    'Digital Signal Processing in Modern Communication Systems (Edition 3)' section 7.3.5
+    '''
+
+    # --------------------------
+    # Error and type checking
+    assert isinstance(SampleRate, float) or isinstance(SampleRate, int), 'The SampleRate must be a numeric type.'
+    assert isinstance(NumberOfSamples, int),                             'The NumberOfSamples must be an integer.'
+    assert isinstance(dBc, np.ndarray),                                  'The dBc must be a numpy array.'
+    assert len(dBc.shape) == 1,                                          'The dBc must be a 1D array.'
+    assert isinstance(Frequencies, np.ndarray),                          'The Frequencies must be a numpy array.'
+    assert len(Frequencies.shape) == 1,                                  'The Frequencies must be a 1D array.'
+    assert len(dBc) == len(Frequencies),                                 'The dBc and Frequencies must have the same length.'
+
+    # Check that Frequencies is monotonically increasing and dBc is all negative
+    assert np.all(np.diff(Frequencies) > 0),                             'The Frequencies must be monotonically increasing.'
+    assert np.all(Frequencies > 0),                                      'The Frequencies values must all be larger than 0.'
+    assert np.all(dBc < 0),                                              'The dBc values must all be negative.'
+    
+    # The largest frequency must be less than 2Mhz
+    assert Frequencies[-1] < 2.01e6,                                     'The largest frequency must be less than 2Mhz.'
+
+    # --------------------------
+    # > Sample the Phase noise profile
+    # --------------------------
+    # Frequencies first
+    MaxFrequency        = Frequencies[-1]
+    SourceFrequencies   = np.hstack([0, Frequencies, MaxFrequency + 1, 2.1e6])
+    SourceAttenuationdB = np.hstack([-200, dBc, -200, -200])
+
+    # --------------------------
+    # There are two interpolation steps.
+    # Step 1: A phase noise profile, as the one shown in section 7.3.5 is a log-log plot. 
+    # Given attenuation values at certain frequencies, we want to find the attenuation values at frequencies that fall onto the 
+    # tick lines associated with the log frequence axis.
+    # Therefore, whatever the source frequencies are, we want find the attenuation values at 20*log10(1e3Hz) = 60dB Hz to 
+    #                                                                                        20*log10(2e6Hz) = 126 dB Hz in 1dB steps.  
+    SourceFrequenciesdB = 20*np.log10(SourceFrequencies + 1)  # The originally given frequencies in dB Hz (add one to avoid taking log of 0)
+    TargetFrequenciesdB = np.arange(60, 127, 1, np.float32)   # The desired frequncies in dB, Which correspond to 20*log10(1Hz) to 20*log10(2Mhz)
+    
+    # Interpolate the attenuations from source dB Hz to target dB Hz frequencies
+    TargetAttenuationdB = np.interp(TargetFrequenciesdB, SourceFrequenciesdB, SourceAttenuationdB)
+  
+    # --------------------------
+    # Step 2: In the second step, we interpolate from the log frequency values back to linear frequency values in steps of 1KHz
+    #         This allows us to design the filter, through which will process white gaussian noise to generate the phase noise profile.
+    TargetFrequenciesLinear      = 10**(TargetFrequenciesdB/20)          # The intermediate frequencies converted back to linear Hz
+    FinalTargetFrequenciesLinear = np.arange(0, 2.00001e6, 1e3, np.float32)    # The final frequencies in linear Hz, at which we want to know the attenuation
+
+    # Interpolate the attenuation values from the source to the target frequencies
+    FinalTargetAttenuationdB     = np.interp(FinalTargetFrequenciesLinear, TargetFrequenciesLinear, TargetAttenuationdB)
+    FinalTargetAttenuationLinear = 10**(FinalTargetAttenuationdB/10)
+
+    # Remember that dBc is a ratio of powers, and we need to use /10 rather than /20 to convert back to linear values 
+
+    # --------------------------
+    # > Use numeric integration to find the rms phase noise error and exit if that is all that is required.
+    # --------------------------
+    SSB_Power = 0           # Single Side Band Power
+    for Index in range(0, len(FinalTargetAttenuationLinear)):
+        SSB_Power += FinalTargetAttenuationLinear[Index] * 1e3
+
+    RMS_PhaseNoiseError = np.sqrt(2*SSB_Power)
+
+    if(bRmsPhaseNoiseOnly == True):
+        return RMS_PhaseNoiseError
+
+
+
+
+    # --------------------------
+    # > Generate the IQ waveform, which when multiplied by a perfect IQ sequence will introduce phase noise according to the desired profile
+    # --------------------------
+    # We will create an FIR filter that features a magnitude response that conforms to the phase noise profile
+    # It is through this filter that we will pass white gaussian noise to generate the phase noise.
+    # The filter will be designed using frequency sampling.
+    # Because the phase noisse profile is defined up to 2MHz, the actual nyquist rate is 4MHz.
+    Freq_Pos    = np.arange(0,  1000, 1, np.float32) * 4e6 / 2000
+    Freq_Neg    = np.arange(-1000, 0, 1, np.float32) * 4e6 / 2000
+    
+    Pow_Pos     = np.interp(Freq_Pos,         FinalTargetFrequenciesLinear, FinalTargetAttenuationLinear)  
+    Pow_Neg     = np.interp(np.abs(Freq_Neg), FinalTargetFrequenciesLinear, FinalTargetAttenuationLinear)   
+
+    LinearPower = np.hstack([Pow_Pos, Pow_Neg])        # The IFFT needs to see the positive frequencies first
+    Magnitude   = np.sqrt(LinearPower)                 # The magnitude response of the filter
+    Temp        = np.fft.ifft(Magnitude)           
+
+    # To get to the FIR taps we need to de-alias the output. So FIR_Taps = np.vstack([Temp[1000:], Temp[0:1000]) or equivalently np.roll(Temp, 1000)
+    FIR_Taps    = np.roll(Temp, 1000).real        # The IFFT output needs to be shifted to produce a real impulse response
+
+    # I always overlay a Hann window on the FIR taps in order to reduce leakage and achieve a better stopband attenuation
+    FIR_Taps    = FIR_Taps * (0.5 - 0.5*np.cos(2*np.pi*np.arange(0, 2000, 1, np.float32)/2000))
+
+    # Generate the white gaussian noise and push it through the FIR filter
+    # Now, the sample rate is 4MHz. We will interpolate later to get to the desired sample rate. 
+    WhiteNoise     = GenerateAwgn(int(NumberOfSamples * SampleRate / 4e6) + 4000, 'float32')
+    PhaseDeviation = np.convolve(WhiteNoise, FIR_Taps, 'full')
+    PhaseDeviation = PhaseDeviation[2000:]                   # Remove the initial transient response
+
+    # Resample the phase deviation from the current 4MHz to the desired sample rate
+    TimeStep                = 4e6 / SampleRate
+    DesiredTime             = np.arange(0, NumberOfSamples * TimeStep - 0.5 * TimeStep, TimeStep, np.float32) 
+    CurrentTime             = np.arange(0, len(PhaseDeviation), 1, np.float32)
+    PhaseDeviationResampled = np.interp(DesiredTime, CurrentTime, PhaseDeviation)
+    
+    # Scale the phase deviation to the computed rms phase noise error
+    IntegratedRmsPhaseNoiseError = np.sqrt(np.mean(PhaseDeviationResampled**2))
+    FinalPhaseNoise              = PhaseDeviationResampled * RMS_PhaseNoiseError / IntegratedRmsPhaseNoiseError
+
+    # Generate the final IQ waveform
+    IqOutput = np.exp(1j*FinalPhaseNoise)
+
+    return (FinalPhaseNoise, IqOutput, RMS_PhaseNoiseError)
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------------------------------------ #
+#                                                                                                              #
+# > 12. ComputeChannelResponseA()                                                                               #
+#                                                                                                              #
+# ------------------------------------------------------------------------------------------------------------ #
+def ComputeChannelResponseA(TimeInSec:       float
+                          , DoubleSidedBwHz: float
+                          , DelaysInSec:     np.ndarray
+                          , Constants:       np.ndarray
+                          , DopplersInHz:    np.ndarray
+                          , bPlot) -> tuple:
+    '''
+    This function will compute the frequency response of a multipath channel that features doppler on each path.
+    The frequency response is computed at a specific time instance and over a specific bandwidth.
+    The DelaySecs, Constants, and Dopplers are the same quantities we have seen in some of the other functions.
+    From Section 8.1.3.2 in the book 'Digital Signal Processing in Modern Communication Systems (Edition 3)'
+    the channel response is given by:
+    H(f,t) = sum_{p=0}^{N-1} Constant_p * exp(-j*2*pi*f*Delay_p) * exp(j*2*pi*Doppler_p*t)
+    '''
+    # Error checking
+    assert isinstance(TimeInSec, float) or isinstance(TimeInSec, int),             'The TimeInSec must be a numeric type.'
+    assert isinstance(DoubleSidedBwHz, float) or isinstance(DoubleSidedBwHz, int), 'The DoubleSidedBwHz must be a numeric type.'
+    assert isinstance(DelaysInSec, np.ndarray),                                    'The DelaysInsSec must be a numpy array.'
+    assert isinstance(Constants, np.ndarray),                                      'The Constants must be a numpy array.'
+    assert isinstance(DopplersInHz, np.ndarray),                                   'The DopplersInHz must be a numpy array.'
+    assert isinstance(bPlot, bool),                                                'The bPlot must be a boolean type.'
+    assert np.issubdtype(DelaysInSec.dtype, np.floating),                          'The DelaysInSec must be a floating point type.'
+    assert np.issubdtype(Constants.dtype, np.complexfloating),                     'The Constants must be a complex type.'
+    assert np.issubdtype(DopplersInHz.dtype, np.integer),                          'The DopplersInHz must be an integer type.'
+    assert len(DelaysInSec) == len(Constants),                                     'The DelaysInSec and Constants must have the same length.'
+    assert len(DelaysInSec) == len(DopplersInHz),                                  'The DelaysInSec and DopplersInHz must have the same length.'
+
+    # The number of paths
+    NumPaths = len(DelaysInSec)
+
+    # The frequency range
+    FStep = DoubleSidedBwHz / 200
+    Freqs = np.arange(-DoubleSidedBwHz/2, DoubleSidedBwHz/2, FStep, np.float32)
+
+    # Allocate memory for the channel response
+    FreqResponse = np.zeros(len(Freqs), np.complex64)
+
+    # Compute the channel response
+    for PathIndex in range(0, NumPaths):
+        FreqResponse += Constants[PathIndex] * np.exp(-1j*2*np.pi*Freqs*DelaysInSec[PathIndex]) * np.exp(1j*2*np.pi*DopplersInHz[PathIndex]*TimeInSec)
+
+    # Plot the channel response
+    if bPlot == True:
+        plt.figure()
+        plt.plot(Freqs, FreqResponse.real, 'r')
+        plt.plot(Freqs, FreqResponse.imag, 'b')
+        plt.plot(Freqs, np.abs(FreqResponse), 'g')
+        plt.grid(True)
+        plt.title('Channel Response')
+        plt.legend(['Real', 'Imag', 'Magnitude'])
+        plt.show()
+
+    return FreqResponse, Freqs
+
+
+
+
+
+# ------------------------------------------------------------------------------------------------------------ #
+#                                                                                                              #
+# > 13. ComputeChannelResponseB()                                                                          #
+#                                                                                                              #
+# ------------------------------------------------------------------------------------------------------------ #
+def ComputeChannelResponseB(TimeInSecArray:  np.ndarray
+                          , FreqInHzArray:   np.ndarray
+                          , SnrDb:           float
+                          , DelaysInSec:     np.ndarray
+                          , Constants:       np.ndarray
+                          , DopplersInHz:    np.ndarray
+                          , bPlot = False) -> tuple:
+    '''
+    This function will compute the frequency response of a multipath channel that features doppler on each path.
+    -> The frequency response is computed at a specific [time, frequency] coordinate array.
+    -> We may add noise to the channel response (to simulate received reference signals) by specifying the SNR in dB.
+    The DelaySecs, Constants, and Dopplers are the same quantities we have seen in some of the other functions.
+    From Section 8.1.3.2 in the book 'Digital Signal Processing in Modern Communication Systems (Edition 3)'
+    the channel response is given by:
+    H(f,t) = sum_{p=0}^{N-1} Constant_p * exp(-j*2*pi*f*Delay_p) * exp(j*2*pi*Doppler_p*t)
+    '''
+    # Error checking
+    assert isinstance(TimeInSecArray, np.ndarray),                                 'The TimeInSecArray must be a numpy array.'
+    assert len(TimeInSecArray.shape) == 1,                                         'The TimeInSecArray must be a 1D array.'
+    assert np.issubdtype(TimeInSecArray.dtype, np.floating),                       'The TimeInSecArray must be a floating point type.'
+    
+    assert isinstance(FreqInHzArray, np.ndarray),                                  'The FreqInHzArray must be a numpy array.'
+    assert len(FreqInHzArray.shape) == 1,                                          'The FreqInHzArray must be a 1D array.'
+    assert np.issubdtype(FreqInHzArray.dtype, np.floating) or \
+           np.issubdtype(FreqInHzArray.dtype, np.integer),                         'The FreqInHzArray must be a numeric type.'
+    assert len(TimeInSecArray) == len(FreqInHzArray),                              'The TimeInSecArray and FreqInHzArray must have the same length.'
+    
+    assert isinstance(SnrDb, float) or isinstance(SnrDb, int),                     'The SnrDb must be a numeric type.'
+    
+    assert isinstance(DelaysInSec, np.ndarray),                                    'The DelaysInsSec must be a numpy array.'
+    assert isinstance(Constants, np.ndarray),                                      'The Constants must be a numpy array.'
+    assert isinstance(DopplersInHz, np.ndarray),                                   'The DopplersInHz must be a numpy array.'
+    assert isinstance(bPlot, bool),                                                'The bPlot must be a boolean type.'
+    assert np.issubdtype(DelaysInSec.dtype, np.floating),                          'The DelaysInSec must be a floating point type.'
+    assert np.issubdtype(Constants.dtype, np.complexfloating),                     'The Constants must be a complex type.'
+    assert np.issubdtype(DopplersInHz.dtype, np.floating) or \
+           np.issubdtype(DopplersInHz.dtype, np.integer),                          'The DopplersInHz must be an numeric type.'
+    assert len(DelaysInSec) == len(Constants),                                     'The DelaysInSec and Constants must have the same length.'
+    assert len(DelaysInSec) == len(DopplersInHz),                                  'The DelaysInSec and DopplersInHz must have the same length.'
+
+    # The number of paths
+    NumPaths       = len(DelaysInSec)
+    NumCoordinates = len(TimeInSecArray)
+
+    # Allocate memory for the channel response
+    FreqResponse = np.zeros(NumCoordinates, np.complex64)
+
+    # Compute the channel response
+    for PathIndex in range(0, NumPaths):
+        for CoordinateIndex in range(0, NumCoordinates):
+            FrequencyHz = FreqInHzArray[CoordinateIndex]
+            TimeInSec   = TimeInSecArray[CoordinateIndex]
+            FreqResponse[CoordinateIndex] += Constants[PathIndex] * np.exp(-1j*2*np.pi*FrequencyHz*DelaysInSec[PathIndex]) * np.exp(1j*2*np.pi*DopplersInHz[PathIndex]*TimeInSec)
+
+    
+    # Add noise to the channel response
+    FreqResponseNoisy = AddAwgn(SnrDb, FreqResponse)
+
+
+    # Plot the channel response
+    if bPlot == True:
+        plt.figure()
+        plt.plot(FreqResponseNoisy.real, 'r')
+        plt.plot(FreqResponseNoisy.imag, 'b')
+        plt.plot(np.abs(FreqResponseNoisy), 'g')
+        plt.grid(True)
+        plt.title('Channel Response')
+        plt.legend(['Real', 'Imag', 'Magnitude'])
+        plt.show()
+
+    return FreqResponseNoisy 
+
+
+
+# ------------------------------------------------------------------------------------------------------------ #
+#                                                                                                              #
+# > 14. Cubic1DInterpolation()                                                                                 #
+#                                                                                                              #
+# ------------------------------------------------------------------------------------------------------------ #
+def Cubic1DInterpolation( x_new
+                        , x_ref
+                        , y_ref
+                        , bPlot) -> np.ndarray:
+    '''
+    This function implements the tried and true cubic spline interpolation that we used in MatLab
+    x_new -> The new x values at which we want the interpolated values
+    x_ref -> The     x values at which the current y_ref values are valid
+    y_ref -> The     y values associated with x_ref
+    Note 1: x_new and x_ref must be real valued. 
+    Note 2: y_ref may be real or complex valued.
+    Note 3: All input arguments must be np.ndarray types
+    '''
+    
+    # ---------------------------
+    # Error checking
+    # ---------------------------
+    assert isinstance(x_new, np.ndarray),                                                     'Invalid type'
+    assert isinstance(x_ref, np.ndarray),                                                     'Invalid type'
+    assert isinstance(y_ref, np.ndarray),                                                     'Invalid type'
+    assert np.issubdtype(x_new.dtype, np.floating) or np.issubdtype(x_new.dtype, np.integer), 'Invalid type'
+    assert np.issubdtype(x_ref.dtype, np.floating) or np.issubdtype(x_ref.dtype, np.integer), 'Invalid type'
+    assert np.issubdtype(y_ref.dtype, np.number),                                             'Invalid type'
+    assert isinstance(bPlot, bool),                                                           'Invalid type'
+    assert len(x_ref) > 1,                                                                    'This vector must have at least two entries'
+    assert len(x_ref) == len(y_ref),                                                          'These vectors must be of equal size'          
+
+
+    # Create the Cubic interpolation class
+    Cs    = interpolate.CubicSpline(x_ref, y_ref, extrapolate = True)
+
+    # Run the class 
+    y_new = Cs(x_new)
+
+    # Plot the result to see the quality of the interpolation
+    if bPlot == True:
+        if np.issubdtype(y_new.dtype, np.complexfloating) == True:
+            plt.figure()
+            plt.subplot(2,1,1)
+            plt.plot(x_ref, y_ref.real, 'o', label='data')
+            plt.plot(x_new, y_new.real, label='true')
+            plt.title('Original and Interpolated Real Value Portion')
+            plt.tight_layout()
+            plt.grid(True)
+            plt.subplot(2,1,2)
+            plt.plot(x_ref, y_ref.imag, 'o', label='data')
+            plt.plot(x_new, y_new.imag, label='true')
+            plt.title('Original and Interpolated Imag Value Portion')
+            plt.tight_layout()
+            plt.grid(True)
+            plt.show()
+        else:
+            plt.figure()
+            plt.plot(x_ref, y_ref, 'o', label='data')
+            plt.plot(x_new, y_new, label='true')
+            plt.title('Original and Interpolated Sequences')
+            plt.grid(True)
+            plt.show()
+
+    return y_new
+        
 
 
 
@@ -953,7 +1317,7 @@ def Resample(InputSequence:        np.ndarray
 # ------------------------------------------------------------
 if __name__ == '__main__':
 
-    Test = 7
+    Test = 9
 
 
 
@@ -1207,7 +1571,7 @@ if __name__ == '__main__':
         TargetSampleRate = 60.0e3
 
         AwgnNoise = np.random.randn(2000)
-        ResampledNoise = Resample(AwgnNoise 
+        ResampledNoise, _ = Resample(AwgnNoise 
                                 , SourceSampleRate 
                                 , TargetSampleRate 
                                 , 0
@@ -1217,3 +1581,52 @@ if __name__ == '__main__':
                                                                     , SampleRate    = TargetSampleRate
                                                                     , FFT_Size      = 1024
                                                                     , bPlot         = True)
+        
+
+    # -------------------------------------------------------
+    # Test the GeneratePhaseNoise() function
+    # -------------------------------------------------------
+    if Test == 8:        
+        SampleRate      = 10e6
+        NumberOfSamples = int(2e6)
+        dBc             = np.array([-85, -85,   -80,  -80,  -90,  -100,  -115,   -130], np.float32)
+        Frequencies     = np.array([1e3, 20e3, 30e3, 40e3, 70e3, 100e3, 200e3, 1000e3], np.float32)
+
+        PhaseNoiseSequence, IqOutput, RmsPhasseNoise =  GeneratePhaseNoise(dBc              # Attenuation portion of the Phase noise profile
+                                                                         , Frequencies      # Frequency portion of the Phase noise profile
+                                                                         , SampleRate       # The sample rate of the output IQ waveform (If the IQ waveform is desired)
+                                                                         , NumberOfSamples  # The number of samples in the output IQ output waveform (If the IQ waveform is desired)
+                                                                         , False)
+    
+        PowerSpectrum, Frequencies, ResolutionBW = SpectrumAnalyzer(PhaseNoiseSequence
+                                                                  , SampleRate     
+                                                                  , 4096 
+                                                                  , False)
+        
+        # Create semilogx plot
+        plt.figure()
+        plt.semilogx(Frequencies, 10*np.log10(PowerSpectrum/ResolutionBW), 'k')
+        plt.grid(True)
+        plt.title('Power Spectrum of IQ waveform with Phase Noise (ResBW = 1Hz)')
+        plt.xlabel('Hz')
+        plt.ylabel('dB')
+        # Set the axis limits
+        plt.xlim([np.min(Frequencies), np.max(Frequencies)])
+        plt.ylim([np.min(dBc) - 10, np.max(dBc) + 10])
+
+        plt.show()
+ 
+        
+    # -------------------------------------------------------
+    # Cubic1DInterpolation() function
+    # -------------------------------------------------------
+    if Test == 9:
+        
+        x_ref = np.arange(0, 20, 1, np.int32)
+        y_ref = np.cos(x_ref) #+ 1j*np.sin(x_ref)
+        x_new = np.arange(-1, 20, 0.1, np.float64)
+        bPlot = True
+        Cubic1DInterpolation( x_new
+                            , x_ref
+                            , y_ref
+                            , bPlot) 

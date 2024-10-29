@@ -1,0 +1,9 @@
+{
+    "python.analysis.extraPaths": [
+        ".\\FlexLink2024\\DspComm",
+        ".\\FlexLink2024\\FlexLink\\PhysicalLayer",
+        ".\\python\\KoliberEng",
+        "./KoliberEng",
+        "./DspComm"
+    ]
+}

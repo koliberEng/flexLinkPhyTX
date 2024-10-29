@@ -495,7 +495,7 @@ if __name__ == "__main__":
 
     NumInputBits = 24000
     rng          = np.random.default_rng(12345)      
-    InputBits    = np.array(rng.integers(low=0, high=2, size=NumInputBits), dtype = np.uint8)
+    InputBits    = np.array(rng.integers(low=0, high=2, size=NumInputBits), dtype = np.uint16)
     
 
     # --------------------------------------------------------
@@ -552,55 +552,55 @@ if __name__ == "__main__":
     # --------------------------------------------------------
     if(TestSelection['MapperTestSimple'] == True):
         BitsPerSymbol = 1   # BPSK
-        BPSKSymbols   = Mapper.Mapping(BitsPerSymbol, np.array([0,1], dtype=np.uint8))
+        BPSKSymbols   = Mapper.Mapping(BitsPerSymbol, np.array([0,1], dtype=np.uint16))
         Bits          = Mapper.HardDemapping(BitsPerSymbol, BPSKSymbols)
         assert all(Bits == [0, 1]), 'Error'
         
         BitsPerSymbol = 2   # QPSK
-        QPSKSymbols = Mapper.Mapping(BitsPerSymbol, np.array([0, 0], dtype=np.uint8))
+        QPSKSymbols = Mapper.Mapping(BitsPerSymbol, np.array([0, 0], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, QPSKSymbols)
         assert all(Bits == [0, 0]), 'Error'
-        QPSKSymbols = Mapper.Mapping(BitsPerSymbol, np.array([1, 1], dtype=np.uint8))
+        QPSKSymbols = Mapper.Mapping(BitsPerSymbol, np.array([1, 1], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, QPSKSymbols)
         assert all(Bits == [1, 1]), 'Error'
 
         BitsPerSymbol = 4   # 16QAM
-        Qam16Symbol0 = Mapper.Mapping(BitsPerSymbol, np.array([0, 0,  0, 0 ], dtype=np.uint8))
+        Qam16Symbol0 = Mapper.Mapping(BitsPerSymbol, np.array([0, 0,  0, 0 ], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam16Symbol0)
         assert all(Bits == [0, 0,  0, 0 ]), 'Error'
-        Qam16Symbol1 = Mapper.Mapping(BitsPerSymbol, np.array([0, 1,  0, 1 ], dtype=np.uint8))
+        Qam16Symbol1 = Mapper.Mapping(BitsPerSymbol, np.array([0, 1,  0, 1 ], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam16Symbol1)
         assert all(Bits == [0, 1,  0, 1 ]), 'Error'
-        Qam16Symbol2 = Mapper.Mapping(BitsPerSymbol, np.array([1, 1,  1, 1 ], dtype=np.uint8))
+        Qam16Symbol2 = Mapper.Mapping(BitsPerSymbol, np.array([1, 1,  1, 1 ], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam16Symbol2)
         assert all(Bits == [1, 1,  1, 1 ]), 'Error'
-        Qam16Symbol3 = Mapper.Mapping(BitsPerSymbol, np.array([1, 0,  1, 0 ], dtype=np.uint8))
+        Qam16Symbol3 = Mapper.Mapping(BitsPerSymbol, np.array([1, 0,  1, 0 ], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam16Symbol3)
         assert all(Bits == [1, 0,  1, 0 ]), 'Error'
 
         BitsPerSymbol = 6   # 64QAM
-        Qam64Symbol0 = Mapper.Mapping(BitsPerSymbol, np.array([0, 0, 0,  0, 0, 0], dtype=np.uint8))
+        Qam64Symbol0 = Mapper.Mapping(BitsPerSymbol, np.array([0, 0, 0,  0, 0, 0], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam64Symbol0)
         assert all(Bits == [0, 0, 0,  0, 0, 0]), 'Error'
-        Qam64Symbol1 = Mapper.Mapping(BitsPerSymbol, np.array([0, 0, 1,  0, 0, 1], dtype=np.uint8))
+        Qam64Symbol1 = Mapper.Mapping(BitsPerSymbol, np.array([0, 0, 1,  0, 0, 1], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam64Symbol1)
         assert all(Bits == [0, 0, 1,  0, 0, 1]), 'Error'
-        Qam64Symbol2 = Mapper.Mapping(BitsPerSymbol, np.array([0, 1, 1,  0, 1, 1], dtype=np.uint8))
+        Qam64Symbol2 = Mapper.Mapping(BitsPerSymbol, np.array([0, 1, 1,  0, 1, 1], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam64Symbol2)
         assert all(Bits == [0, 1, 1,  0, 1, 1]), 'Error'
-        Qam64Symbol3 = Mapper.Mapping(BitsPerSymbol, np.array([0, 1, 0,  0, 1, 0], dtype=np.uint8))
+        Qam64Symbol3 = Mapper.Mapping(BitsPerSymbol, np.array([0, 1, 0,  0, 1, 0], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam64Symbol3)
         assert all(Bits == [0, 1, 0,  0, 1, 0]), 'Error'
-        Qam64Symbol4 = Mapper.Mapping(BitsPerSymbol, np.array([1, 1, 0,  1, 1, 0], dtype=np.uint8))
+        Qam64Symbol4 = Mapper.Mapping(BitsPerSymbol, np.array([1, 1, 0,  1, 1, 0], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam64Symbol4)
         assert all(Bits == [1, 1, 0,  1, 1, 0],), 'Error'
-        Qam64Symbol5 = Mapper.Mapping(BitsPerSymbol, np.array([1, 1, 1,  1, 1, 1], dtype=np.uint8))
+        Qam64Symbol5 = Mapper.Mapping(BitsPerSymbol, np.array([1, 1, 1,  1, 1, 1], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam64Symbol5)
         assert all(Bits == [1, 1, 1,  1, 1, 1]), 'Error'
-        Qam64Symbol6 = Mapper.Mapping(BitsPerSymbol, np.array([1, 0, 1,  1, 0, 1], dtype=np.uint8))
+        Qam64Symbol6 = Mapper.Mapping(BitsPerSymbol, np.array([1, 0, 1,  1, 0, 1], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam64Symbol6)
         assert all(Bits == [1, 0, 1,  1, 0, 1]), 'Error'
-        Qam64Symbol7 = Mapper.Mapping(BitsPerSymbol, np.array([1, 0, 0,  1, 0, 0], dtype=np.uint8))
+        Qam64Symbol7 = Mapper.Mapping(BitsPerSymbol, np.array([1, 0, 0,  1, 0, 0], dtype=np.uint16))
         Bits        = Mapper.HardDemapping(BitsPerSymbol, Qam64Symbol7)
         assert all(Bits == [1, 0, 0,  1, 0, 0]), 'Error'
 
@@ -644,7 +644,7 @@ if __name__ == "__main__":
         BitsPerSymbol = 1   # BPSK
         FreqResponse  = np.complex64(2 + 3j)
         NoiseVariance = np.float32(2)
-        BPSKSymbols   = Mapper.Mapping(BitsPerSymbol, np.array([0], dtype=np.uint8))
+        BPSKSymbols   = Mapper.Mapping(BitsPerSymbol, np.array([0], dtype=np.uint16))
 
         # The observation before white Gaussian noise
         Y             = np.complex64(BPSKSymbols[0] * FreqResponse)
@@ -834,7 +834,7 @@ if __name__ == "__main__":
         Ber64Qam    = [0] * len(CinrdBRange)
         for Index, CinrdB  in enumerate(CinrdBRange):
             print(str(CinrdB))
-            InputBits   = np.random.randint(low=0, high=2, size = 60000, dtype = np.uint8)
+            InputBits   = np.random.randint(low=0, high=2, size = 60000, dtype = np.uint16)
             Qam1Symbols = Mapper.Mapping(1, InputBits)
             Qam2Symbols = Mapper.Mapping(2, InputBits)
             Qam4Symbols = Mapper.Mapping(4, InputBits)

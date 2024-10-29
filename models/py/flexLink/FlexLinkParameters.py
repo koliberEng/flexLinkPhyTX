@@ -19,12 +19,14 @@ from   FlexLinkCoder  import CCrcProcessor
 # ---------------------------------------------------------------
 @unique
 class EReType(Enum):
-    Unassigned           = -1    # Not assigned
-    Emtpy                = 0     # Empty resource element = 0 + j0
-    RefSignalPort0       = 1     # Demodulation reference signals port 0
-    RefSignalPort1       = 2     # Demodulation reference signals port 1
-    Control              = 3     # Control resource element
-    Data                 = 4     # Generic data resource element
+    Unassigned           = 1    # Not assigned
+    Empty                = 0     # Empty resource element = 0 + j0
+    RefSignalPort0       = 2     # Demodulation reference signals port 0
+    RefSignalPort1       = -2    # Demodulation reference signals port 1
+    UnassignedDataP0     = 3     # Generic data resource element on port 0
+    UnassignedDataP1     = -3    # Generic data resource element on port 1
+    Control              = 4     # Control resource element (can only be on port 0)
+    
     SignalField          = 5     # Data resource element reserved for signal field
     PayloadAEvenCodeWord = 6     # I want to be able to see the placement of different 
     PayloadAOddCodeWord  = 7     # code words inside PayloadA
@@ -105,7 +107,7 @@ class CControlInformation():
         self.NumberDcSubcarriers            = CControlInformation.AvailableNumDcSubcarriers[DcSubcarrierFlag]
 
         # Create the Control Bit Array
-        self.ControlInformationArray        = np.zeros(CControlInformation.NumberOfControlBits, np.uint8)
+        self.ControlInformationArray        = np.zeros(CControlInformation.NumberOfControlBits, np.uint16)
         self.ControlInformationArray[0]     = math.floor(ReferenceSymbolPeriodicityIndex / 2) % 2         # MSB of ReferenceSymbolPeriodicityIndex 
         self.ControlInformationArray[1]     = ReferenceSymbolPeriodicityIndex % 2                         # LSB of ReferenceSymbolPeriodicityIndex
         self.ControlInformationArray[2]     = math.floor(ReferenceSignalSpacingIndex / 2) % 2             # MSB of ReferenceSignalSpacingIndex 
@@ -160,14 +162,14 @@ class CSignalField():
     """
     The class manages the information embedded in the signal field
     """
-    AvailableFecOptions          = ['LDPC Coding', 'Polar Coding']
+    AvailableFecOptions          = ['LDPC  Coding', 'Polar Coding']
     AvailableCodeBlockSizesLDPC  = [648, 1296, 1944, 1944]
     AvailableCodeBlockSizesPolar = [256,  512, 1024, 2048]
     AvailableCodingRateLDPC      = [1/2,  2/3,  3/4,  5/6,  1/2,  1/2,  1/2,  1/2]
     AvailableCodingRatePolar     = [1/4,  3/8,  1/2,  5/8,  3/4,  7/8,  1/4,  1/4]
     AvailableRateMatchingFactors = [0, 0.5, 0.75, 1, 3, 7, 15, 31]    # No bits are repeated / Half the bits are repeated / ... / All bits are repeated 31 times
     AvailableBitsPerQamSymbol    = [1, 2, 4, 6]                       # BPSK, QPSK, 16QAM, 64QAM
-    AvailableClientFlags         = ['Point-to-Point', 'Point-to-Multipoint']
+    AvailableClientFlags         = ['Service Terminal', 'Client Terminal']
 
 
     # -----------------------------------------------------------
@@ -180,7 +182,7 @@ class CSignalField():
                , NDB_A:                 int = 0       # 0 to 10**14 - 1 or 16383  The number of data blocks sent in payload A
                , RM_A_Flag:             int = 0       # 0/1/2/3/4/5/6/7 -> RateMatchingFactor = 0, 0.5, 0.75, 1, 3, 7, 15, 31  Number rate matched bits = CBS * (1 + RateMatchingFactor)
                , BPS_A_Flag:            int = 0       # 0/1/2/3 -> BPSK, QPSK, 16QAM, 64QAM
-               , NumOfdmSymbols:        int = 0       # 0 to 10**14 - 1 or 16383  
+               , NumOfdmSymbols:        int = 0       # 0 to 10**14 - 1 or 16383, the number of OFDM symbols in the resource grid
                , TxReferenceClockCount: int = 0       # 0 to 10**14 - 1 or 16383  The number of data blocks sent in payload A
                , Client_Flag:           int = 0       # 0/1 -> Point-to-Point / Point-to-Multipoint
                ):
@@ -196,13 +198,13 @@ class CSignalField():
         if isinstance(BPS_A_Flag, int):
             assert BPS_A_Flag >=0   and   BPS_A_Flag < 4, 'The BPS_A_Flag argument is invalid'
             self.SignalFieldFormat = 1
-            self.SignalFieldArray = np.zeros(64, np.uint8)      # The bit stream representing the Signal Field format 1
+            self.SignalFieldArray = np.zeros(64, np.uint16)      # The bit stream representing the Signal Field format 1
         else:
             assert len(BPS_A_Flag) == 76 or len(BPS_A_Flag) == 70, 'The BPS_A_Flag argument must be of length 76 (LTE BW) or 70 (WLAN BW).'
             assert all([( (x >= 0 and x < 8) and isinstance(x, int)) for x in BPS_A_Flag.tolist()]), 'The BPS_A_Flag argument is invalid'
             self.SignalFieldFormat = 2
-            self.SignalFieldArray = np.zeros(290, np.uint8)     # The bit stream representing the signal field format 2
-        assert isinstance(NumOfdmSymbols, int)        and NumOfdmSymbols >=0        and NumOfdmSymbols < 2**14,        'The NumOfdmSymbols argument is invalid'
+            self.SignalFieldArray = np.zeros(290, np.uint16)     # The bit stream representing the signal field format 2
+        assert isinstance(NumOfdmSymbols, int)        and NumOfdmSymbols >= 3       and NumOfdmSymbols < 2**14,        'The NumOfdmSymbols argument is invalid'
         assert isinstance(TxReferenceClockCount, int) and TxReferenceClockCount >=0 and TxReferenceClockCount < 2**14, 'The TxReferenceClockCount argument is invalid'
         assert isinstance(Client_Flag, int)           and Client_Flag >=0           and Client_Flag < 2,               'The Client_Flag argument is invalid'
 
@@ -237,7 +239,6 @@ class CSignalField():
             for Index, BPS_Flag in enumerate(BPS_A_Flag):
                 self.BitsPerQamSymbol[Index]   = self.AvailableBitsPerQamSymbol[BPS_A_Flag[Index]]
 
-        self.NumberOfdmSymbols     = NumOfdmSymbols
         self.TxReferenceClockCount = TxReferenceClockCount
         self.ClientMode            = CSignalField.AvailableClientFlags[Client_Flag]
 
@@ -246,23 +247,23 @@ class CSignalField():
         # Create the SignalFieldArray and the Return String
         self.ReturnString  = '------------- Summary of Signal Field ----------------- \n'
         self.SignalFieldArray[0]     = FEC_Mode
-        self.ReturnString += '  0: ' + self.FEC + ' = b' + "{:01b}".format(FEC_Mode) + '\n' 
+        self.ReturnString += '  0: ' + self.FEC + '               (b' + "{:01b}".format(FEC_Mode) + ')\n' 
 
         self.SignalFieldArray[1]     = math.floor(CBS_A_Flag / 2) % 2          # MSB of CBS_A_Flag 
         self.SignalFieldArray[2]     = CBS_A_Flag % 2                          # LSB of CBS_A_Flag
-        self.ReturnString += '  1: Code Block Size: ' + str(self.CodeBlockSizeA) + ' = b' + "{:02b}".format(CBS_A_Flag) + '\n' 
+        self.ReturnString += '  1: Code Block Size:           ' + str(self.CodeBlockSizeA) + ' (b' + "{:02b}".format(CBS_A_Flag) + ')\n' 
 
         self.SignalFieldArray[3]     = math.floor(FEC_A_Flag / 4) % 2          # MSB of FEC_A_Flag
         self.SignalFieldArray[4]     = math.floor(FEC_A_Flag / 2) % 2          #  
         self.SignalFieldArray[5]     = math.floor(FEC_A_Flag / 1) % 2          # LSB of FEC_A_Flag 
-        self.ReturnString += '  2: Coding Rate: ' + str(self.CodingRate) + ' = b' + "{:03b}".format(FEC_A_Flag) + '\n' 
+        self.ReturnString += '  2: Coding Rate:               ' + str(self.CodingRate) + ' (b' + "{:03b}".format(FEC_A_Flag) + ')\n' 
 
         NextIndex = 6
         for Index in range(0, 14):
             self.SignalFieldArray[NextIndex] = math.floor( NDB_A / (2**(13 - Index)) ) % 2  # LSB first ... MSB last
             NextIndex += 1
         
-        self.ReturnString += '  3: Number of Data Blocks: ' + str(self.NumberDataBlocksA) + ' = b' + "{:014b}".format(self.NumberDataBlocksA) + '\n' 
+        self.ReturnString += '  3: Number of Data Blocks:     ' + str(self.NumberDataBlocksA) + ' (b' + "{:014b}".format(self.NumberDataBlocksA) + ')\n' 
 
         self.SignalFieldArray[NextIndex]    = math.floor(RM_A_Flag / 4) % 2           # MSB of RM_A_Flag
         NextIndex += 1
@@ -270,7 +271,7 @@ class CSignalField():
         NextIndex += 1
         self.SignalFieldArray[NextIndex]    = math.floor(RM_A_Flag / 1) % 2           # LSB of RM_A_Flag 
         NextIndex += 1
-        self.ReturnString += '  4: Rate Matching Factor: ' + str(self.RateMatchingFactor) + ' = b' + "{:03b}".format(RM_A_Flag) + '\n' 
+        self.ReturnString += '  4: Rate Matching Factor:      ' + str(self.RateMatchingFactor) + ' (b' + "{:03b}".format(RM_A_Flag) + ')\n' 
 
         # Handle Signal Field Format 1 and 2
         if   self.SignalFieldFormat == 1:
@@ -278,7 +279,7 @@ class CSignalField():
             NextIndex += 1
             self.SignalFieldArray[NextIndex]   = math.floor(BPS_A_Flag / 1) % 2         # LSB of BPS_A_Flag
             NextIndex += 1
-            self.ReturnString += '  5: Bits per QAM Value: ' + str(self.BitsPerQamSymbol) + ' = b' + "{:02b}".format(self.BitsPerQamSymbol) + '\n' 
+            self.ReturnString += '  5: Bits per QAM Value:        ' + str(self.BitsPerQamSymbol) + ' (b' + "{:02b}".format(self.BitsPerQamSymbol) + ')\n' 
 
         elif self.SignalFieldFormat == 2:
             for n in range(0, 76):
@@ -299,27 +300,27 @@ class CSignalField():
         for n in range(0, 14):
             self.SignalFieldArray[NextIndex] = math.floor( NumOfdmSymbols / (2**(13-n)) ) % 2          # LSB first ... MSB last
             NextIndex += 1
-        self.ReturnString += '  6: Number of OFDM Symbols: ' + str(NumOfdmSymbols) + ' = b' + "{:014b}".format(NumOfdmSymbols) + '\n' 
+        self.ReturnString += '  6: Number of OFDM Symbols:    ' + str(NumOfdmSymbols) + ' (b' + "{:014b}".format(NumOfdmSymbols) + ')\n' 
 
         for n in range(0, 14):
             self.SignalFieldArray[NextIndex] = math.floor( TxReferenceClockCount / (2**(13 -n) ) ) % 2   # LSB first ... MSB last
             NextIndex += 1
-        self.ReturnString += '  7: Tx Reference Clock Count: ' + str(TxReferenceClockCount) + ' = b' + "{:014b}".format(TxReferenceClockCount) + '\n' 
+        self.ReturnString += '  7: Tx Reference Clock Count:  ' + str(TxReferenceClockCount) + ' (b' + "{:014b}".format(TxReferenceClockCount) + ')\n' 
 
         self.SignalFieldArray[NextIndex]    = Client_Flag                           # LSB of SignalFieldFormatIndex
         NextIndex += 1
-        self.ReturnString += '  8: Client Configuration: ' + self.ClientMode + ' = b' + "{:01b}".format(Client_Flag) + '\n' 
+        self.ReturnString += '  8: Client Configuration:      ' + self.ClientMode + ' (b' + "{:01b}".format(Client_Flag) + ')\n' 
 
         # Compute the 10 bit CRC
         CrcOutput        = CCrcProcessor.ComputeCrc(CCrcProcessor.Generator10_GSM, self.SignalFieldArray.tolist())
-        self.ReturnString += '  9: CRC = b' # + self.ClientMode + ' = ' + "{:01b}".format(Client_Flag) + '\n' 
+        self.ReturnString += '  9: CRC                        (b' # + self.ClientMode + ' = ' + "{:01b}".format(Client_Flag) + '\n' 
 
         for n in range(0, 10):
             self.SignalFieldArray[NextIndex] = CrcOutput[n]
             self.ReturnString += "{:01b}".format(CrcOutput[n])
             NextIndex += 1
 
-        self.ReturnString += '\n'
+        self.ReturnString += ')\n'
 
         # Error checking. The NextIndex must be either 64 or 290 at this point. Otherwise we did something wrong
         assert NextIndex == 64 or NextIndex == 290, 'The Signal field was not built correctly'
@@ -376,7 +377,7 @@ if __name__ == '__main__':
                               , FEC_A_Flag = 5
                               , NDB_A = 100
                               , RM_A_Flag = 1
-                              , BPS_A_Flag = np.random.randint(low=0, high=8, size=76, dtype=np.uint8)
+                              , BPS_A_Flag = 1 # BPS_A_Flag = np.random.randint(low=0, high=4, size=76, dtype=np.uint16)
                               , NumOfdmSymbols = 20
                               , TxReferenceClockCount = 16383
                               , Client_Flag = 1)

@@ -43,6 +43,7 @@
 __title__     = "FlexLinkTransmitter"
 __author__    = "Andreas Schwarzinger"
 __status__    = "preliminary"
+__version__   = "1.0.0"
 __date__      = "April, 20th, 2024"
 __copyright__ = 'Andreas Schwarzinger'
 
@@ -50,11 +51,28 @@ __copyright__ = 'Andreas Schwarzinger'
 # Import Statements
 # --------------------------------------------------------
 from   FlexLinkParameters import *
+from   FlexLinkPhyBase    import CFlexLinkPhyBase
 from   FlexLinkCoder      import CCrcProcessor, CLdpcProcessor, CPolarProcessor, InterleaverFlexLink, CLinearFeedbackShiftRegister
 from   QamMapping         import CQamMappingIEEE
 import Preamble
 import numpy              as np
-import matplotlib.pyplot as plt
+import matplotlib.pyplot  as plt
+
+import os
+import sys                               # We use sys to include new search paths of modules
+OriginalWorkingDirectory = os.getcwd()   # Get the current directory
+DirectoryOfThisFile      = os.path.dirname(__file__)   # FileName = os.path.basename
+if DirectoryOfThisFile != '':
+    os.chdir(DirectoryOfThisFile)        # Restore the current directory
+
+# There are modules that we will want to access and they sit two directories above DirectoryOfThisFile
+sys.path.append(DirectoryOfThisFile + "\\..\\..\\DspComm")
+sys.path.append(DirectoryOfThisFile + "\\..\\..\\..\\python\\KoliberEng")
+
+import ModulateDemodulate as md 
+import Visualization  as vis
+# md = ModulateDemodulate()
+# vis = visualization.Visualization()
 
 
 # --------------------------
@@ -76,7 +94,7 @@ import matplotlib.pyplot as plt
 # --------------------------------------------------------
 # > Class: CFlexLinkTransmitter
 # --------------------------------------------------------
-class CFlexLinkTransmitter():
+class CFlexLinkTransmitter(CFlexLinkPhyBase):
     '''
     brief: A class that unifies the FlexLink transmitter portion of the modem
     '''
@@ -92,62 +110,33 @@ class CFlexLinkTransmitter():
     def __init__(self
                , bLteBw:         bool = True
                , bOverSampling:  bool = True):
+        # Calling Constructor of base class
+        # There are a lot of variables that are shared between the Transmitter and Receiver in the base class
+        super().__init__(bLteBw, bOverSampling)
         
         # Error checking
         assert isinstance(bLteBw, bool),         'The input argument bLteBw must be a boolean value'
         assert isinstance(bOverSampling, bool),  'The input argument bOverSampling must be a boolean value'  
            
-        # --------------------------------------------------
-        # Set parameters based on the oversampling flag
-        if bOverSampling == True:               # The IFFT will produce samples at 40MHz sample rate
-            self.IfftSize        = 2048         # This is the suggested mode as the DAC should not be running at 20MHz but 40MHz --> 2048/40MHz = 51.2 microseconds
-            self.CP_Length       = 232          # 232 / 40MHz = 5.8 microseconds
-            self.SampleRate      = 40e6         # This reduces sample and hold distortion produced by the DAC and makes analog filtering easier.
-        else:                                   # The IFFT will produce samples at 20MHz sample rate
-            self.IfftSize        = 1024         # This mode is mostly meant for debugging and illustration                       --> 1024/20MHz = 51.2 microseconds
-            self.CP_Length       = 116          # 116 / 20MHz = 5.8 microseconds
-            self.SampleRate      = 20e6   
-               
-        self.ScSpacing           = self.SampleRate/self.IfftSize                                                          # = 19.53125KHz
-        
-        # ---------------------------------------------------
-        # Set parameters based on the bandwidth flag (See the resource grid layout figure in the specification)
-        if bLteBw == True:
-            self.NumSubcarriers       = 913
-            self.MaxSubcarrier        = 912
-            self.CenterSubcarrier     = 456
-            self.NumResourceBlocks    = 76
-        else:
-            self.NumSubcarriers       = 841
-            self.MaxSubcarrier        = 840
-            self.CenterSubcarrier     = 420
-            self.NumResourceBlocks    = 70
-
-        # The following parameters are required when mapping between the resource grid and the Fourier Transform Modules
-        self.PosIfftIndices      = np.arange(0,                                     self.CenterSubcarrier + 1, 1, np.int16)   # These are the IFFT input indices, to which we 
-        self.NegIfftIndices      = np.arange(self.IfftSize - self.CenterSubcarrier, self.IfftSize,          1, np.int16)      # connect the negative and positive subcarriers
-
-        self.OccupiedBw           = self.NumSubcarriers * self.ScSpacing
-        self.PosSubcarrierIndices = np.arange(self.CenterSubcarrier, self.NumSubcarriers,   1, np.int16)
-        self.NegSubcarrierIndices = np.arange(0,                     self.CenterSubcarrier, 1, np.int16)
-
-
         # Uninitialized parameters 
         # --> self.ResourceGrid is self explanatory
-        # --> self.ResourceGridEnum holds an integer representing the type of information present in the resource element 
+        # --> self.ResourceGridEnum holds an integer representing the type of information present in the resource element (It is in the base class)
+        # self.ControlInformation   (See the base class)
+        # self.SignalField          (See the base class)
         self.ResourceGrid       = None         # This will be initialized to a complex valued numpy matrix in the InitializeResourceGrid()
-        self.ResourceGridEnum   = None         # This will be initialized to an enum   valued numpy matrix in the InitializeResourceGrid()
-        self.ControlInformation = None         # An object that references the current control information
-        self.SignalField        = None         # An object that references the current signal field information
-        self.PayloadA           = None         # An object that references the current PayloadA information
-        self.PayloadB           = None         # An object that references the current PayloadB information 
         
         # Construct some of the required objects for the transmitter
         self.PolarProcessor     = CPolarProcessor()
         self.LdpcProcessor      = None
-        self.LFSR               = CLinearFeedbackShiftRegister(bUseMaxLengthTable = True, IndexOrTapConfig = 8)
-        self.LFSR.InitializeShiftRegister([0, 0, 0, 0, 0, 0, 0, 1])
-        self.ScrambingSequence  = self.LFSR.RunShiftRegister(NumberOutputBits= 255) 
+
+        # Debugging Quantities for the Signal Field
+        self.EncodedBitsOfSignalField      = None # Signal Field Bits after FEC encoding
+        self.InterleavedBitsOfSignalField  = None # Signal Field Bits after Interleaving
+        self.RateMatchedBitsOfSignalField  = None # Signal Field Bits after Rate matching
+        self.ScrambledBitsOfSignalField    = None # Signal Field Bits after Scrambling
+        self.ReSequenceOfSignalFieldP0     = None # The resource element sequence to be mapped into the resource grid for port0
+        self.ReSequenceOfSignalFieldP1     = None # The resource element sequence to be mapped into the resource grid for port1
+
 
 
         # Boolean Flags
@@ -160,26 +149,6 @@ class CFlexLinkTransmitter():
 
 
     # --------------------------------------------------------------------------------------------------------------------------------------- #
-    # > Function: SFBC_Encode()                                                                                                               #
-    # --------------------------------------------------------------------------------------------------------------------------------------- #
-    @staticmethod
-    def SFBC_Encode(X0: np.complex_
-                  , X1: np.complex_) -> np.array:
-        '''
-        This function return the SFBC encoded information for a pair of input QAM values.
-        '''
-        Port0First  = X0
-        Port0Second = X1
-        Port1First  = -1*np.conj(X1)
-        Port1Second = -1*np.conj(X0)
-        Output      = np.array([Port0First, Port0Second, Port1First, Port1Second])
-        
-        return Output
-
-
-
-
-    # --------------------------------------------------------------------------------------------------------------------------------------- #
     #                                                                                                                                         #
     #                                                                                                                                         #
     # > Function: InitializeResourceGrid()                                                                                                    #
@@ -188,51 +157,53 @@ class CFlexLinkTransmitter():
     # --------------------------------------------------------------------------------------------------------------------------------------- #
     def InitializeResourceGrid(self
                              , ControlInfo: CControlInformation
-                             , NumberOfdmSymbols: int):
+                             , SignalField: CSignalField):
         '''
         This function will populate the first symbol the resource grid based with control information and reference signals
         '''
         # Error checking
         assert isinstance(ControlInfo, CControlInformation), 'The ControlInfo input argument is of invalid type'
-        assert isinstance(NumberOfdmSymbols, int),           'Only use integers for the NumberOfdmSymbols argument'
+        assert isinstance(SignalField, CSignalField),        'Only use integers for the NumberOfdmSymbols argument'
+
+        NumberOfdmSymbols = SignalField.NumOfdmSymbols
         assert NumberOfdmSymbols > 3,                        'The resource grid must have at least 3 OFDM symbols - 1 Ref Symbol, 1 Signal Field Symbol, 1 PayloadA symbol'
 
-        # ----------------------------------
-        # The resource grid is a matrix of complex values that will be read out to the IFFT
-        # ----------------------------------
-        MaxNumberTxAntennas     = 2
-        self.ResourceGrid       = np.zeros([self.NumSubcarriers, NumberOfdmSymbols, MaxNumberTxAntennas], np.complex64)
-        self.ResourceGridEnum   = EReType.Unknown.value * np.ones([self.NumSubcarriers, NumberOfdmSymbols, MaxNumberTxAntennas], np.uint16)
-        self.ControlInformation = ControlInfo 
+        # -----------------------------------
+        # > Call the intializers in the base class. They configure the self.ResourceGridEnum, which is part of the base class
+        # -----------------------------------
+        self.PreInitReferenceGrid(ControlInfo)
+        self.InitReferenceGridEnum(SignalField)
 
+        # ----------------------------------
+        # > The resource grid is a matrix of complex values that will be read out to the IFFT
+        # ----------------------------------
+        self.ResourceGrid       = np.zeros(self.ResourceGridEnum.shape, np.complex64)  
+        
+   
         # ----------------------------------
         # > Place control information into the first reference symbol
         # ----------------------------------
-        NumberSubcarriers = self.ResourceGrid.shape[0]
-        Ob                = -1                       # ControlInfoOpportunityIndex
-        for k in range(0, NumberSubcarriers):        # k is the subcarrier index
+        ControlBitCount  = 0    # There are some 300 ControlBits that are placed
+        for k in range(0, self.NumSubcarriers):        # k is the subcarrier index
 
             # Can we place a control element at this subcarrier???
-            bControlElementOpportunity = (k % 3 == 0)
-            if bControlElementOpportunity == False or k == self.CenterSubcarrier:
-                continue
+            if self.ResourceGridEnum[k, 0, CFlexLinkTransmitter.AntPort0] == EReType.Control.value:
+                ControlBitIndex     = ControlBitCount % CControlInformation.NumberOfControlBits
+                CurrentControlBit   = ControlInfo.ControlInformationArray[ControlBitIndex]
+                ScramblingBit       = self.ScrambingSequence[ControlBitCount % len(self.ScrambingSequence)]
+                ScrambledControlBit = (1 + CurrentControlBit + ScramblingBit) % 2 
 
-            # Increment the control opportunity index
-            Ob                 += 1
-            ControlBitIndex     = Ob % 12
-            CurrentControlBit   = ControlInfo.ControlInformationArray[ControlBitIndex]
-            ScramblingBit       = self.ScrambingSequence[Ob % len(self.ScrambingSequence)]
-            ScrambledControlBit = (1 + CurrentControlBit + ScramblingBit) % 2 
+                # Convert the scrambled control bit into a BPSK symbol
+                QamSymbol           = np.complex64(2*int(ScrambledControlBit) - 1)
 
-            # Convert the scrambled control bit into a BPSK symbol
-            QamSymbol = np.complex64(2*ScrambledControlBit - 1)
-            
-            # Place the QamSymbol - Only at Antenna port 0 as control information is only places there.
-            self.ResourceGrid[k, 0, CFlexLinkTransmitter.AntPort0]    = QamSymbol
-            self.ResourceGridEnum[k,0, CFlexLinkTransmitter.AntPort0] = EReType.Control.value
+                # Place the QamSymbol - Only at Antenna port 0 as control information is only places there.
+                self.ResourceGrid[k, 0, CFlexLinkTransmitter.AntPort0]    = QamSymbol
+
+                # Increment the control bit count
+                ControlBitCount    += 1
 
         # ----------------------------------
-        # > Place the reference signals of antanna port 0 into the first reference symbol
+        # > Place the reference signals of antanna port 0 into the all reference symbols
         # ----------------------------------
         if ControlInfo.NumberTxAntennas == 1:
             Scaling = np.complex64(1)                   # BPSK modulation 0/1 -> -1 + j0 / 1 + j0 (No other scaling)
@@ -240,130 +211,39 @@ class CFlexLinkTransmitter():
             Scaling = np.complex64(1.414)               # Reference signals are BPSK modulated with 3dB boost 
                                                         # Thus bits 0/1 map to -1.414 + j0 / 1.414 + j0
 
-        Rb = -1                                         # Reference signal opportunity Index
-        for k in range(0, NumberSubcarriers):           # k is the subcarrier index
-            bRefSignalP0Opportunity = ((k-2) % 3 == 0)  # Can we place a port 0 reference signal here???
-            if bRefSignalP0Opportunity == True:
-                Rb += 1
-                ScrambledRefSignalBit = self.ScrambingSequence[Rb % len(self.ScrambingSequence)] % 2
+        for l in range(0, self.SignalField.NumOfdmSymbols, self.ControlInformation.ReferenceSymbolPeriodicity):
 
-                # Convert the scrambled reference bit into a BPSK symbol
-                RefSignalP0 = np.complex64(2*ScrambledRefSignalBit - 1) * Scaling
-
-                # Place the reference signal into the resource grid
-                self.ResourceGrid[k, 0, CFlexLinkTransmitter.AntPort0]     = RefSignalP0
-                self.ResourceGridEnum[k, 0, CFlexLinkTransmitter.AntPort0] = EReType.RefSignalPort0.value
+            RefSignalP0Count = 0                            # There are close to 300 RefSignalP0 values placed
+            for k in range(0, self.NumSubcarriers):         # k is the subcarrier index
                 
-                if ControlInfo.NumberTxAntennas == 2:
-                    # The reference signal position in the other resource grid of the other antenna port must be empty
-                    self.ResourceGrid[k, 0, CFlexLinkTransmitter.AntPort1]     = 0  
-                    self.ResourceGridEnum[k, 0, CFlexLinkTransmitter.AntPort1] = EReType.Emtpy.value
+                # Can we place a reference signal P0 at this subcarrier???
+                if self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] == EReType.RefSignalPort0.value:
+                    ScramblingRefBit                                       = self.ScrambingSequence[RefSignalP0Count % len(self.ScrambingSequence)]
+                    QamSymbol                                              = np.complex64(2*int(ScramblingRefBit) - 1) # Convert the scrambled control bit into a BPSK symbol
+                    self.ResourceGrid[k, l, CFlexLinkTransmitter.AntPort0] = QamSymbol*Scaling                         # Place the QamSymbol               
+                    RefSignalP0Count                                      += 1                                         # Increment the reference signal P0 bit count
 
 
         # ----------------------------------
-        # > Place the reference signals of antanna port 1 into the first reference symbol
-        # ----------------------------------
-        Scaling = np.complex64(-1.414)               # Reference signals are BPSK modulated with 3dB boost 
-                                                     # Thus bits 0/1 map to -1.414 + j0 / 1.414 + j0
-
-        Rb = -1                                      # Reference signal opportunity Index
-        for k in range(0, NumberSubcarriers):        # k is the subcarrier index
-            bRefSignalP1Opportunity = ((k-1) % 3 == 0) and ControlInfo.NumberTxAntennas == 2
-            if bRefSignalP1Opportunity == True:
-                Rb += 1
-                ScrambledRefSignalBit = self.ScrambingSequence[Rb % len(self.ScrambingSequence)] % 2
-
-                # Convert the scrambled reference bit into a BPSK symbol
-                RefSignalP1 = np.complex64(2*ScrambledRefSignalBit - 1) * Scaling
-
-                # Place the reference signal into the resource grid
-                self.ResourceGrid[k, 0, CFlexLinkTransmitter.AntPort1]     = RefSignalP1
-                self.ResourceGridEnum[k, 0, CFlexLinkTransmitter.AntPort1] = EReType.RefSignalPort1.value
-
-                # The reference signal position in the other resource grid of the other antenna port must be empty
-                self.ResourceGrid[k, 0, CFlexLinkTransmitter.AntPort0]     = 0  
-                self.ResourceGridEnum[k, 0, CFlexLinkTransmitter.AntPort0] = EReType.Emtpy.value
-
-
-        # ----------------------------------
-        # > Place the reference signals of antanna port 0 into the remaining reference symbols
+        # > Place the reference signals of antanna port 1 into all reference symbols
         # ----------------------------------
         if ControlInfo.NumberTxAntennas == 1:
             Scaling = np.complex64(1)                   # BPSK modulation 0/1 -> -1 + j0 / 1 + j0 (No other scaling)
         else:  
-            Scaling = np.complex64(-1.414)              # Reference signals are BPSK modulated with 3dB boost 
+            Scaling = np.complex64(1.414)               # Reference signals are BPSK modulated with 3dB boost 
                                                         # Thus bits 0/1 map to -1.414 + j0 / 1.414 + j0
 
-        for l in range(1, NumberOfdmSymbols):               # l is the OFDM symbol index
-            if l % ControlInfo.ReferenceSymbolPeriodicity != 0:
-                continue                                    # Only proceed if l is a reference symbol
+        for l in range(0, self.SignalField.NumOfdmSymbols, self.ControlInformation.ReferenceSymbolPeriodicity):
 
-            for n in range(0, 1000):      
-                ScrambledRefSignalBit = self.ScrambingSequence[n % len(self.ScrambingSequence)] % 2  
-                RefSignalP0           = np.complex64(2*ScrambledRefSignalBit - 1) * Scaling      
-                match ControlInfo.ReferenceSignalSpacing:
-                    case 3:
-                        k = 2 + n * 3
-                    case 6:
-                        k = 2 + n * 6
-                    case 12:
-                        k = 5 + n * 12
-                    case 24:
-                        k = 11 + n * 24            
-                    case _:
-                        assert False
-                if k >= self.NumSubcarriers:
-                    break
-                else:
-                    # Place the reference signal into the resource grid
-                    self.ResourceGrid[k, l, CFlexLinkTransmitter.AntPort0]     = RefSignalP0
-                    self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] = EReType.RefSignalPort0.value
-                    RefSignalP0                                               *= np.sign(np.random.randn(1))[0]
-                    
-                    if ControlInfo.NumberTxAntennas == 2:
-                        # The reference signal position in the other resource grid of the other antenna port must be empty
-                        self.ResourceGrid[k, 0, CFlexLinkTransmitter.AntPort1]     = 0  
-                        self.ResourceGridEnum[k, 0, CFlexLinkTransmitter.AntPort1] = EReType.Emtpy.value
-
-
-        # ----------------------------------
-        # > Place the reference signals of antanna port 1 into the remaining reference symbols
-        # ----------------------------------
-        Scaling = np.complex64(-1.414)              # Reference signals are BPSK modulated with 3dB boost 
-                                                        # Thus bits 0/1 map to -1.414 + j0 / 1.414 + j0
-
-        for l in range(1, NumberOfdmSymbols):           # l is the OFDM symbol index
-            if ControlInfo.NumberTxAntennas == 1:
-                break                                   # Exit as there is one one antenna
-            if l % ControlInfo.ReferenceSymbolPeriodicity != 0:
-                continue                                # Only proceed if l is a reference symbol
-
-            for n in range(0, 1000):  
-                ScrambledRefSignalBit = self.ScrambingSequence[n % len(self.ScrambingSequence)] % 2  
-                RefSignalP1           = np.complex64(2*ScrambledRefSignalBit - 1) * Scaling   
-                match ControlInfo.ReferenceSignalSpacing:
-                    case 3:
-                        k = 1 + n * 3
-                    case 6:
-                        k = 1 + n * 6
-                    case 12:
-                        k = 4 + n * 12
-                    case 24:
-                        k = 10 + n * 24            
-                    case _:
-                        assert False
-
-                if k >= self.NumSubcarriers:
-                    break
-                else:
-                    # Place the reference signal into the resource grid
-                    self.ResourceGrid[k, l, CFlexLinkTransmitter.AntPort1]     = RefSignalP1
-                    self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] = EReType.RefSignalPort1.value
-                     
-
-                    # The reference signal position in the other resource grid of the other antenna port must be empty
-                    self.ResourceGrid[k, 0, CFlexLinkTransmitter.AntPort0]     = 0  
-                    self.ResourceGridEnum[k, 0, CFlexLinkTransmitter.AntPort0] = EReType.Emtpy.value
+            RefSignalP1Count = 0                            # There are close to 300 RefSignalP0 values placed
+            for k in range(0, self.NumSubcarriers):         # k is the subcarrier index
+                
+                # Can we place a reference signal P0 at this subcarrier???
+                if self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] == EReType.RefSignalPort1.value:
+                    ScramblingRefBit                                       = self.ScrambingSequence[RefSignalP1Count % len(self.ScrambingSequence)]
+                    QamSymbol                                              = np.complex64(2*int(ScramblingRefBit) - 1)     # Convert the scrambled control bit into a BPSK symbol
+                    self.ResourceGrid[k, l, CFlexLinkTransmitter.AntPort1] = QamSymbol*Scaling                             # Place the QamSymbol               
+                    RefSignalP1Count                                      += 1                                             # Increment the reference signal P0 bit count
 
 
         # ----------------------------------
@@ -372,16 +252,13 @@ class CFlexLinkTransmitter():
         Half    = int(ControlInfo.NumberDcSubcarriers / 2)
         DcRange = range(self.CenterSubcarrier - Half, self.CenterSubcarrier + Half + 1)
 
-        for l in range(0, NumberOfdmSymbols):               # l is the OFDM symbol index
-            
+        for l in range(0, NumberOfdmSymbols):               # l is the OFDM symbol index     
             for k in DcRange:                               # k is the subcarrier index
-                if self.ResourceGridEnum [k, l, CFlexLinkTransmitter.AntPort0] == -1:       # Nothing has yet been placed here
-                    self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] = EReType.Emtpy.value
+                if self.ResourceGridEnum [k, l, CFlexLinkTransmitter.AntPort0] == EReType.Empty.value:       # Nothing has yet been placed here
                     self.ResourceGrid    [k, l, CFlexLinkTransmitter.AntPort0] = np.complex64(0)
 
                 if ControlInfo.NumberTxAntennas == 2:
-                    if self.ResourceGridEnum [k, l, CFlexLinkTransmitter.AntPort1] == -1:       # Nothing has yet been placed here
-                        self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] = EReType.Emtpy.value
+                    if self.ResourceGridEnum [k, l, CFlexLinkTransmitter.AntPort1] == EReType.Empty.value:       # Nothing has yet been placed here
                         self.ResourceGrid    [k, l, CFlexLinkTransmitter.AntPort1] = np.complex64(0)
 
 
@@ -464,9 +341,9 @@ class CFlexLinkTransmitter():
         MessageBitIndices             = SortedIndices[0: K]
         FrozenBitIndices              = SortedIndices[K:]              # Technically, this object is only needed in the decoder
 
-        SourceBits                    = np.zeros(N, np.uint8)
+        SourceBits                    = np.zeros(N, np.uint16)
         SourceBits[MessageBitIndices] = self.SignalField.SignalFieldArray.copy()
-        EncodedBits                   = self.PolarProcessor.RunPolarEncoder(SourceBits)
+        self.EncodedBitsOfSignalField = self.PolarProcessor.RunPolarEncoder(SourceBits)
 
         # ----------------------------------------------------------------------------
         # Step 2: Interleave the encoded information (simulation will have to show how useful this step actually is.)
@@ -479,8 +356,8 @@ class CFlexLinkTransmitter():
 
         InterleavingIndices = InterleaverFlexLink(FEC_Mode, CBS_A_Flag)
 
-        InterleavedBits                      = np.zeros(N, np.uint8)
-        InterleavedBits[InterleavingIndices] = EncodedBits 
+        self.InterleavedBitsOfSignalField                      = np.zeros(N, np.uint16)
+        self.InterleavedBitsOfSignalField[InterleavingIndices] = self.EncodedBitsOfSignalField 
 
         # ----------------------------------------------------------------------------
         # Step 3: Rate Matching / Repetition
@@ -488,58 +365,37 @@ class CFlexLinkTransmitter():
         # First we need to find out how many resource elements are available within the number of OFDM
         # symbols that we have available for the signal field
         ReCount           = 0
-        NumberSubcarriers = self.ResourceGrid.shape[0]
 
-        # For single antenna case
-        if self.ControlInformation.NumberTxAntennas == 1:
-            for l in range(1, NumberSignalFieldSymbols + 1):  # Remember, symbol l = 0 is reserved for the control information
-                for k in range(0, NumberSubcarriers):
-                    ResourceElementValue     = self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0]
-                    bAvailableForSignalField = ResourceElementValue != EReType.Emtpy.value          and \
-                                               ResourceElementValue != EReType.RefSignalPort0.value  
-                    
-                    if bAvailableForSignalField == True:
-                        # This statement is really meant for visualization when calling PlotResourceGrid()
-                        self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0]     = EReType.SignalField.value
-                        if self.ControlInformation.NumberTxAntennas == 2:
-                            self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] = EReType.SignalField.value
-                        
-                        ReCount += 1
+        for l in range(1, NumberSignalFieldSymbols + 1):  # Remember, symbol l = 0 is reserved for the control information
+            for k in range(0, self.NumSubcarriers):
+                if self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] == EReType.SignalField.value:          
 
-        # Dual Antenna case
-        else:   
-            for l in range(1, NumberSignalFieldSymbols + 1):  # Remember, symbol l = 0 is reserved for the control information
-                for k in range(0, NumberSubcarriers):
-                    # Count the resource elements for self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0]
-                    ResourceElementValueP0    = self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0]
-                    ResourceElementValueP1    = self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1]
-                    bAvailableForSignalField  = ResourceElementValueP0 != EReType.Emtpy.value          and \
-                                                ResourceElementValueP0 != EReType.RefSignalPort0.value and \
-                                                ResourceElementValueP1 != EReType.Emtpy.value          and \
-                                                ResourceElementValueP1 != EReType.RefSignalPort1.value
-                    
-                    if bAvailableForSignalField == True:
-                        # This statement is really meant for visualization when calling PlotResourceGrid()
-                        self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] = EReType.SignalField.value
-                        if self.ControlInformation.NumberTxAntennas == 2:
-                            self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] = EReType.SignalField.value
-                        
-                        ReCount += 1
+                    # If there are two antennas, then ensure that the Resource element type in the 
+                    # AntPort1 resource grid matches what is assigned in the AntPort0 resource grid.
+                    # Reassign the resource element type to SignalField
+                    if self.ControlInformation.NumberTxAntennas == 2:
+                        assert self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] == self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1]
+                                              
+                    ReCount += 1
+                
+                
 
+      
         # Compute the number of available bits 
         NumAvailableSignalFieldBits = ReCount * NumBitsPerQamValue
 
         # Create the rate matched bit array
-        RateMatchedBits = np.zeros(NumAvailableSignalFieldBits, np.uint8)                    
+        self.RateMatchedBitsOfSignalField = np.zeros(NumAvailableSignalFieldBits, np.uint16)                    
         for BitIndex in range(0, NumAvailableSignalFieldBits):
-            RateMatchedBits[BitIndex] = InterleavedBits[BitIndex % N]
+            self.RateMatchedBitsOfSignalField [BitIndex] = self.InterleavedBitsOfSignalField[BitIndex % N]
 
 
         # ------------------------------------------------------------------------
         # Step 4: Scramble the Rate Matched bits
         # ------------------------------------------------------------------------
+        self.ScrambledBitsOfSignalField = np.zeros(NumAvailableSignalFieldBits, np.uint16)       
         for BitIndex in range(0, NumAvailableSignalFieldBits):
-            RateMatchedBits[BitIndex] = (RateMatchedBits[BitIndex]  + self.ScrambingSequence[BitIndex % len(self.ScrambingSequence)]) % 2
+            self.ScrambledBitsOfSignalField[BitIndex] = (self.RateMatchedBitsOfSignalField[BitIndex]  + self.ScrambingSequence[BitIndex % len(self.ScrambingSequence)]) % 2
 
 
 
@@ -547,26 +403,38 @@ class CFlexLinkTransmitter():
         # Step 5: Convert the Rate Matched Bit stream into BPSK or QPSK values and map them into the Resource Grid
         # ------------------------------------------------------------------------
         if self.ControlInformation.NumberTxAntennas == 1:
+            self.ReSequenceOfSignalFieldP0     = np.zeros(int(len(self.ScrambledBitsOfSignalField) / NumBitsPerQamValue), np.complex64)
             StartBit = 0
+            QamCount = 0
             for l in range(1, NumberSignalFieldSymbols + 1):  # Remember, symbol l = 0 is reserved for the control information
-                for k in range(0, NumberSubcarriers):
+                for k in range(0, self.NumSubcarriers):
 
                     if self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] == EReType.SignalField.value:
-                        assert StartBit <= len(RateMatchedBits) - NumBitsPerQamValue
-                        self.ResourceGrid[k,l, CFlexLinkTransmitter.AntPort0] = CQamMappingIEEE.Mapping(NumBitsPerQamValue, RateMatchedBits[StartBit:StartBit+NumBitsPerQamValue])[0]
+                        assert StartBit <= len(self.ScrambledBitsOfSignalField) - NumBitsPerQamValue
+                        self.ReSequenceOfSignalFieldP0[QamCount]              = CQamMappingIEEE.Mapping(NumBitsPerQamValue, self.ScrambledBitsOfSignalField[StartBit:StartBit+NumBitsPerQamValue])[0]
+                        self.ResourceGrid[k,l, CFlexLinkTransmitter.AntPort0] = self.ReSequenceOfSignalFieldP0[QamCount]    
                         StartBit += NumBitsPerQamValue
+                        QamCount += 1
 
             # Ensure that we have gone through the entire RateMatchedBits array. If not, there is a mapping error
-            assert StartBit == len(RateMatchedBits), 'A mapping error has occured.'  
+            assert StartBit == len(self.ScrambledBitsOfSignalField), 'A mapping error has occured.'  
+            assert QamCount == len(self.ReSequenceOfSignalFieldP0),  'A mapping error has occured.'
 
         else:   
             # We have two antenna ports and we must use SFBC during the mapping process
+
+            # -------------------- Debugging Arrays
+            self.ReSequenceOfSignalFieldP0     = np.zeros(int(len(self.ScrambledBitsOfSignalField) / NumBitsPerQamValue), np.complex64)
+            self.ReSequenceOfSignalFieldP1     = np.zeros(int(len(self.ScrambledBitsOfSignalField) / NumBitsPerQamValue), np.complex64)
+            QamCount                           = 0    # only exists for the debugging arrays 
+            # --------------------
+
             StartBit                    = 0
             SignalFieldOpportunityCount = 0
             CurrentReLocation           = [0, 1]
             LastReLocation              = [0, 1]
             for l in range(1, NumberSignalFieldSymbols + 1):  # Remember, symbol l = 0 is reserved for the control information
-                for k in range(0, NumberSubcarriers):
+                for k in range(0, self.NumSubcarriers):
                     CurrentReLocation           = [k, l]
 
                     # Only take action if the current resource element is reserved for the signal field
@@ -579,10 +447,10 @@ class CFlexLinkTransmitter():
 
                         # Every two signal field opportunities we will want to map the SFCB encoded information
                         if SignalFieldOpportunityCount % 2 == 0:
-                            assert StartBit <= len(RateMatchedBits) - 2 * NumBitsPerQamValue
-                            X0  = CQamMappingIEEE.Mapping(NumBitsPerQamValue, RateMatchedBits[StartBit:StartBit+NumBitsPerQamValue])
+                            assert StartBit <= len(self.ScrambledBitsOfSignalField) - 2 * NumBitsPerQamValue
+                            X0  = CQamMappingIEEE.Mapping(NumBitsPerQamValue, self.ScrambledBitsOfSignalField[StartBit:StartBit+NumBitsPerQamValue])
                             StartBit += NumBitsPerQamValue
-                            X1  = CQamMappingIEEE.Mapping(NumBitsPerQamValue, RateMatchedBits[StartBit:StartBit+NumBitsPerQamValue])
+                            X1  = CQamMappingIEEE.Mapping(NumBitsPerQamValue, self.ScrambledBitsOfSignalField[StartBit:StartBit+NumBitsPerQamValue])
                             StartBit += NumBitsPerQamValue                        
 
                             SFBC_Symbols = CFlexLinkTransmitter.SFBC_Encode(X0, X1)
@@ -601,10 +469,54 @@ class CFlexLinkTransmitter():
                             self.ResourceGrid[Last_k,    Last_l,    CFlexLinkTransmitter.AntPort1 ] = Port1First[0]
                             self.ResourceGrid[Current_k, Current_l, CFlexLinkTransmitter.AntPort1 ] = Port1Second[0]  
 
+                            # --------- Populate Debugging Arrays
+                            self.ReSequenceOfSignalFieldP0[QamCount]  =  Port0First[0]
+                            self.ReSequenceOfSignalFieldP1[QamCount]  =  Port1First[0]
+                            QamCount += 1
+                            self.ReSequenceOfSignalFieldP0[QamCount]  =  Port0Second[0]
+                            self.ReSequenceOfSignalFieldP1[QamCount]  =  Port1Second[0] 
+                            QamCount += 1
+                            # ----------------------------------------
+
                         LastReLocation = CurrentReLocation
 
             # Ensure that we have gone through the entire RateMatchedBits array. If not, there is a mapping error
-            assert StartBit == len(RateMatchedBits), 'A mapping error has occured.'  
+            assert StartBit == len(self.ScrambledBitsOfSignalField), 'A mapping error has occured.'  
+            assert QamCount == len(self.ReSequenceOfSignalFieldP0),  'A mapping error has occured.'
+
+
+
+
+        # --------------------------
+        # Create the self.ResourceBlockEnum matrix, which we synthezise from the self.ResourceGridEnum matrix 
+        # --------------------------
+        self.ResourceBlockEnum = EReType.Unassigned.value * np.ones([self.NumResourceBlocks, self.SignalField.NumOfdmSymbols], np.int16)
+        
+        # Itererate through the resource blocks
+        for l in range(0, self.SignalField.NumOfdmSymbols):
+            # Iterate through the subcarriers
+            for k in range(0, self.NumSubcarriers):
+                # Determine in which resource block we are currently located
+                kVirtual = k
+                if kVirtual > self.CenterSubcarrier:
+                    kVirtual = k -1
+                CurrentResourceBlockIndex = int(kVirtual / 12)
+
+                # Check each resource element and determine the resource block type. We ignore resource elements that hold
+                # reference signals and DC resource elements
+                if self.ResourceGridEnum[k, l, 0] == EReType.PayloadAEvenCodeWord.value:
+                    self.ResourceBlockEnum[CurrentResourceBlockIndex, l] = EReType.PayloadAEvenCodeWord.value
+                if self.ResourceGridEnum[k, l, 0] == EReType.PayloadAOddCodeWord.value:
+                    self.ResourceBlockEnum[CurrentResourceBlockIndex, l] = EReType.PayloadAOddCodeWord.value
+                if self.ResourceGridEnum[k, l, 0] == EReType.Control.value:
+                    self.ResourceBlockEnum[CurrentResourceBlockIndex, l] = EReType.Control.value
+                if self.ResourceGridEnum[k, l, 0] == EReType.SignalField.value:
+                    self.ResourceBlockEnum[CurrentResourceBlockIndex, l] = EReType.SignalField.value                 
+                if self.ResourceGridEnum[k, l, 0] == EReType.UnassignedDataP0 .value:
+                    self.ResourceBlockEnum[CurrentResourceBlockIndex, l] = EReType.UnassignedDataP0.value 
+
+
+
 
         # Indicate the the signal field was added
         self.SignalFieldWasAdded     = True
@@ -647,9 +559,10 @@ class CFlexLinkTransmitter():
         # Error Checking
         assert self.SignalFieldWasAdded,                                    'You must add the signal field before adding payloadA'
         assert isinstance(DataBlockList, list)
+        assert len(DataBlockList) == self.SignalField.NumberDataBlocksA,    'Unexpected number of data blocks in DataBlockList'
         for ListIndex in range(0, len(DataBlockList)):
             assert isinstance(DataBlockList[ListIndex], np.ndarray),        'Each data block must be a numpy array'
-            assert np.issubdtype(DataBlockList[ListIndex].dtype, np.uint8), 'Each data block must a numpy array of type np.uint8'
+            assert np.issubdtype(DataBlockList[ListIndex].dtype, np.uint16), 'Each data block must a numpy array of type np.uint16'
             
             assert len(DataBlockList[ListIndex]) == DataBlockSize,          'The number of bits in the Data Blocks is invalid'
             for BitIndex in range(0, DataBlockSize):
@@ -669,7 +582,8 @@ class CFlexLinkTransmitter():
                     strEncodingRate = '1/2'
 
             # Construct the LdpcProcessor
-            self.LdpcProcessor('WLAN', None, CodeBlockSize, strEncodingRate)
+            self.LdpcProcessor = CLdpcProcessor('WLAN', None, CodeBlockSize, strEncodingRate)
+            N                     = CodeBlockSize
         else:                                        # Configure the Polar encoder
             p                     = 0.55             # The base erasure probability
             N                     = CodeBlockSize    # The number of final encoded bits (code block size)
@@ -679,15 +593,18 @@ class CFlexLinkTransmitter():
             MessageBitIndices     = SortedIndices[0: K]
 
 
-        # Determine where we will start to map PayloadA information into the ResourceGrid
-        StartOfdmSymbolIndex    = self.ControlInformation.NumberSignalFieldSymbols + 1     
-        StartSubcarrierIndex    = 0                               
+        # Determine where we will start to map PayloadA information into the ResourceGrid. We want to declare
+        # these variable before the for range loops that follows below, as these variables are updated within the loops.
+        StartOfdmSymbolIndex    = self.ControlInformation.NumberSignalFieldSymbols + 1    
+        StartResourceBlockIndex = 0    
+        StartSubcarrierIndex    = 0
+                             
 
         # To make our life easier let's create an array of 76 entries representing the number of bits
         # per QAM symbol for each resource block. This will facilitate the accounting of available resource
         # when we deteremine the number of bits available in each resource block
         if self.SignalField.SignalFieldFormat == 1:
-            BpsEachResourceBlock = self.SignalField.BitsPerQamSymbol * np.ones(76, np.uint8)
+            BpsEachResourceBlock = self.SignalField.BitsPerQamSymbol * np.ones(76, np.uint16)
         else:
             BpsEachResourceBlock = self.SignalField.BitsPerQamSymbol   # Which must be a vector this time
 
@@ -697,9 +614,9 @@ class CFlexLinkTransmitter():
             DataBlock = DataBlockList[ListIndex]
 
             # -----------------------------------------------------------------------
-            # > Compute the CRC and form the data word
+            # > 1. Compute the CRC and form the data word
             # -----------------------------------------------------------------------
-            DataWord                  = np.zeros(DataBlockSize + 16, np.uint8)
+            DataWord                  = np.zeros(DataBlockSize + 16, np.uint16)
             DataWord[0:DataBlockSize] = DataBlock
 
             CrcOutput = CCrcProcessor.ComputeCrc(CCrcProcessor.Generator16_LTE, DataBlock.tolist())
@@ -710,12 +627,12 @@ class CFlexLinkTransmitter():
 
 
             # -----------------------------------------------------------------------
-            # > FEC encode the data word into an encoded data word
+            # > 2. FEC encode the data word into an encoded data word
             # -----------------------------------------------------------------------
             if self.SignalField.FEC_Mode == 0:     # This is LDCP coding
                 EncodedDataWord               = self.LdpcProcessor.EncodeBits(DataWord)
             else:
-                SourceBits                    = np.zeros(N, np.uint8)
+                SourceBits                    = np.zeros(N, np.uint16)
                 SourceBits[MessageBitIndices] = DataWord 
                 EncodedDataWord               = self.PolarProcessor.RunPolarEncoder(SourceBits)         
 
@@ -723,128 +640,75 @@ class CFlexLinkTransmitter():
                 
                 
             # -----------------------------------------------------------------------
-            # > Interleave the encoded data word to form the code block
+            # > 3. Interleave the encoded data word to form the code block
             # -----------------------------------------------------------------------    
             InterleavingIndices            = InterleaverFlexLink(self.SignalField.FEC_Mode, self.SignalField.CBS_A_Flag)
-            CodeBlock                      = np.zeros(N, np.uint8)
+            CodeBlock                      = np.zeros(N, np.uint16)
             CodeBlock[InterleavingIndices] = EncodedDataWord 
 
+
             # -----------------------------------------------------------------------
-            # > Determine the minimum size of the code word, which is the rate matched bit stream.
+            # > 4. Determine the minimum size of the code word, which is the rate matched bit stream.
             # -----------------------------------------------------------------------    
             MinimumCodeWordSize            = int(CodeBlockSize * (1 + self.SignalField.RateMatchingFactor))
 
             # ----------------------------------------------------------------------
-            # > Determine the actual number of rate matched bits, which will be >= MinimumCodeWordSize. Remember, the MinimumCodeWordSize
-            #   will likely not completely fill up the last resource block. We must find the number of code word bits that will in 
-            #   fact fill the last resource block completely. To find the actual number of code word bits, we need to iterate through
-            #   self.ResourceGridEnum and see which resource elements are available for placement of PayloadA data. We count the number of
-            #   resource elements available until we get to the subcarrier index that fills a complete resource block. Then we check to 
-            #   see whether the code word bit count is >= MinimumCodeWordSize. This has to be done for both the single and dual TX antenna case
+            # > 5. Determine the actual number of rate matched bits, which will be >= MinimumCodeWordSize. Remember, the MinimumCodeWordSize
+            #      will likely not completely fill up the last resource block. We must find the number of code word bits that will in 
+            #      fact fill the last resource block completely. To find the actual number of code word bits, we use self.CapacityTable_RefSymbol
+            #      and self.CapacityTable_DataSymbol, which indicate the bit capacity for each resource blocks in an OFDM reference and data symbol
+            #      given the BPS information provided in the SignalField. Remember, the SignalField only provides BPS information for payloadA.
             # ----------------------------------------------------------------------
             # We start at coordinates [k, l] in the resource grid and start counting bits
-            NumCodeWordBits       = 0                        # Keep track of the number of bits available for PayloadA in the resource grid
-            NumResourceBlocksUsed = 0                        # Keep track of the number of resource blocks used
-            k                     = StartSubcarrierIndex 
-            l                     = StartOfdmSymbolIndex
-            bFirstPass            = True
+            NumCodeWordBits           = 0                        # Keep track of the number of bits available for PayloadA in the resource grid
+            NumResourceBlocksUsed     = 0                        # Keep track of the number of resource blocks used
+            CurrentResourceBlockIndex = StartResourceBlockIndex 
+            CurrentOfdmSymbolIndex    = StartOfdmSymbolIndex
 
             while True:
-                k = k % self.NumSubcarriers
+                # Determine whether the current Ofdm Symbol (with index l) is an OFDM reference or data symbol
+                bReferenceSymbol = CurrentOfdmSymbolIndex % self.ControlInformation.ReferenceSymbolPeriodicity == 0
 
-                # Don't take any action if you hit the center subcarrier
-                if k == self.CenterSubcarrier:
-                    k += 1 
-                    continue
+                # Grab a reference to the capacity table that we need to use for this OFDM symbol with index l
+                if bReferenceSymbol == True:
+                    CurrentCapacityTable = self.CapacityTable_RefSymbol
+                else:
+                    CurrentCapacityTable = self.CapacityTable_DataSymbol
+                
+                NumCodeWordBits       += np.uint16(CurrentCapacityTable[CurrentResourceBlockIndex])
+                NumResourceBlocksUsed += 1
 
-                # Check to see whether the last resource blocks has been completely used. Be careful here.
-                # The center carrier does not belong to any resource block. Therefore, to detect whether a resource block
-                # has been filled for subcarrier indices, k, that are larger than self.CenterSubcarrier, we need to 
-                # make an adjustment
-                # If kVirtual = 0,  then this is the first subcarrier of the current resource block
-                # if kVirtual = 11, then we are at the last subcarrier of the current resource block
-                kVirtual = k
-                if kVirtual > self.CenterSubcarrier: 
-                    kVirtual = k -1 
-                    
-                CurrentResourceBlockIndex   = int(kVirtual / 12)            # As there are 12 subcarriers in a resource block    
-                # Did we completely fill a resource block during the last iteration????    
-                bLastResourceBlockFull = kVirtual % 12 == 0 and bFirstPass == False
+                # Prepare indices for the next iteration through the while loop
+                CurrentResourceBlockIndex += 1
+                if CurrentResourceBlockIndex == self.NumResourceBlocks:   # Them move to the next OFDM symbol
+                    CurrentResourceBlockIndex = 0
+                    CurrentOfdmSymbolIndex   += 1
 
-                # If the a resource block was filled during the last iteration, then check to see whether we have used all bits 
-                # in the code work. If so, let's break out of the loop as we have found the actual number of bits needed for the CodeWord.
-                if bLastResourceBlockFull == True:
-                    NumResourceBlocksUsed += 1
-                    # Note, the actual number of bits that we use will likely be slightly larger than the
-                    # MinimumCodeWordSize. Remember, that we want to fill up an integer number of resource blocks
-                    # The MinimumCodeWordSize may not be enough bits to do that. 
-                    #print(NumCodeWordBits/NumResourceBlocksUsed)
-                    if NumCodeWordBits >= MinimumCodeWordSize:
-                        break
-
-                CurrentResourceElementTypeP0 = self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0]
-                CurrentResourceElementTypeP1 = self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1]
-
-                # This is an idiots check. Just make sure we are not doing something silly like attempting to write on top of the signal field
-                assert CurrentResourceElementTypeP0 != EReType.SignalField.value, 'We should not be mapping PayloadA on top of the signal field'
-                assert CurrentResourceElementTypeP1 != EReType.SignalField.value, 'We should not be mapping PayloadA on top of the signal field'
-
-                bAvailableForPayloadA       = CurrentResourceElementTypeP0 != EReType.Emtpy.value          and \
-                                              CurrentResourceElementTypeP0 != EReType.RefSignalPort0.value and \
-                                              CurrentResourceElementTypeP0 != EReType.Control              and \
-                                              CurrentResourceElementTypeP1 != EReType.Emtpy.value          and \
-                                              CurrentResourceElementTypeP1 != EReType.RefSignalPort1.value 
-
-                # The BPS in each resource block can vary depending on the channel conditions. The SignalFieldFormat2 is used to
-                # To construct a BpsEachResourceBlock array that has different BPS in the entries.
-                # For SignalFieldFormat1, BpsEachResourceBlock would have the same BPS value in all entries                                      
-                BPS                         = BpsEachResourceBlock[CurrentResourceBlockIndex]
-
-                # If BPS is 0, then it was determined to not place any data in this resource block
-                if BPS == 0:
-                    bAvailableForPayloadA = False
-
-                # If we can in fact place payload A data here, then ... do it.
-                if bAvailableForPayloadA == True:    
-                    NumCodeWordBits           += BPS
-                    if ListIndex % 2 == 0:   # Thus even
-                        self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] = EReType.PayloadAEvenCodeWord.value
-                        if self.ControlInformation.NumberTxAntennas == 2:
-                            self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] = EReType.PayloadAEvenCodeWord.value
-                    else:
-                        self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0] = EReType.PayloadAOddCodeWord.value
-                        if self.ControlInformation.NumberTxAntennas == 2:
-                            self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] = EReType.PayloadAOddCodeWord.value
-                    
-                #print('k = ' + str(k) + '    Available: ' + str(bAvailableForPayloadA) + '   NumberOfBits: ' + str(NumCodeWordBits))
-
-                # Increment the subcarrier and OFDM symbol index
-                k += 1                                                  # Proceed to next subcarrier
-                if k % self.NumSubcarriers == 0:                        # Proceed to next OFDM symbol
-                    l += 1      
-
-                bFirstPass = False
+                # Exit the loop in case that the NumCodeWordBits that are located in the NumResourceBlocksUsed is larger
+                # than the MinimumCodeWordSize. At that point we have found out how many resource blocks we actually need.
+                if NumCodeWordBits >= MinimumCodeWordSize:
+                    break
 
             #print('CodeWord: ' + str(ListIndex) + '  Resource blocks used: ' + str(NumResourceBlocksUsed) + "    CodeWordSize: " + str(NumCodeWordBits))
 
             # -----------------------------------------------------------------------
-            # > With the correct code word size, execute the rate matching operation
+            # > 6. With the correct code word size, execute the rate matching operation
             # -----------------------------------------------------------------------
             CodeWordSize     = NumCodeWordBits
-            CodeWord         = np.zeros(CodeWordSize, np.uint8)
+            CodeWord         = np.zeros(CodeWordSize, np.uint16)
             for BitIndex in range(0, CodeWordSize):
                 CodeWord[BitIndex] = CodeBlock[BitIndex % CodeBlockSize]   # Rate matching / Repetition happens here
 
 
             # ------------------------------------------------------------------------
-            # > Scramble the Rate Matched bits
+            # > 7. Scramble the Rate Matched bits
             # ------------------------------------------------------------------------
             for BitIndex in range(0, len(CodeWord)):
                 CodeWord[BitIndex] = (CodeWord[BitIndex]  + self.ScrambingSequence[BitIndex % len(self.ScrambingSequence)]) % 2
 
 
             # -----------------------------------------------------------------------
-            # > Map the CodeWord 
+            # > 8. Map the CodeWord 
             # -----------------------------------------------------------------------
             NumCodeWordBits          = 0
             NumResourceBlocksUsed    = 0
@@ -886,6 +750,9 @@ class CFlexLinkTransmitter():
                     if NumCodeWordBits >= MinimumCodeWordSize:
                         break
 
+                # Ensure that we are not extracting information at symbols that don't exist. Remember, that we had set number of symbols in the control
+                # information object. Thus before we computed how many symbols we actually need.
+                assert l < self.SignalField.NumOfdmSymbols, 'We are attempting to map data into a non-existent OFDM symbol'
                 CurrentResourceElementTypeP0 = self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0]
                 CurrentResourceElementTypeP1 = self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] 
 
@@ -903,10 +770,10 @@ class CFlexLinkTransmitter():
 
                 # If BPS is 0, then it was determined to not place any data in this resource block
                 if BPS == 0:
-                    self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0]   = EReType.Emtpy.value
+                    self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort0]   = EReType.Empty.value
                     self.ResourceGrid    [k, l, CFlexLinkTransmitter.AntPort0]   = 0 + 0j
                     if self.ControlInformation.NumberTxAntennas == 2:
-                        self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] = EReType.Emtpy.value
+                        self.ResourceGridEnum[k, l, CFlexLinkTransmitter.AntPort1] = EReType.Empty.value
                         self.ResourceGrid    [k, l, CFlexLinkTransmitter.AntPort1] = 0 + 0j
                     bAvailableForPayloadA = False
 
@@ -924,7 +791,8 @@ class CFlexLinkTransmitter():
                         # We want to take action every second resource element opportunity for PayloadA
                         # Otherwise, we can't execute the SFBC algorithm
                         if PayloadAOpportunityCount % 2 == 0:    
-                            assert NumCodeWordBits <= CodeWordSize - 2 * BPS
+                            assert NumCodeWordBits <= CodeWordSize - 2 * BPS, 'NumCodeWordBit (' + str(NumCodeWordBits) + ') is larger than CodeWordSize - 2 * BPS (' + \
+                                                                                                   str(CodeWordSize - 2 * BPS) + ')'
                             X0  = CQamMappingIEEE.Mapping(int(BPS), CodeWord[NumCodeWordBits:NumCodeWordBits+BPS])
                             NumCodeWordBits += BPS
                             X1  = CQamMappingIEEE.Mapping(int(BPS), CodeWord[NumCodeWordBits:NumCodeWordBits+BPS])
@@ -959,120 +827,15 @@ class CFlexLinkTransmitter():
                 bFirstPass = False
 
             assert NumCodeWordBits == CodeWordSize, 'A mistake occurred while mapping payload A data into the resource grid.'
-            StartSubcarrierIndex = k
-            StartOfdmSymbolIndex = l
+            StartSubcarrierIndex    = k
+            StartOfdmSymbolIndex    = l
+            StartResourceBlockIndex = CurrentResourceBlockIndex
 
 
         # Set the flags indicating what has been done
         self.PayloadAWasAdded        = True
         self.PayloadBWasAdded        = False
         self.PacketWasBuild          = False
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # ---------------------------------------------------------------------------------------------------------------- #
-    #                                                                                                                  #
-    #                                                                                                                  #
-    # > Function: OfdmModulate() - This function transforms the resource grid into the time domain OFDM symbols        #
-    #                                                                                                                  #
-    #                                                                                                                  #
-    # ---------------------------------------------------------------------------------------------------------------- #
-    def OfdmModulate(self
-                   , AntennaPort: int ) -> np.ndarray:
-        '''
-        This function OFDM modulates the QAM values in the resource grid
-        '''
-        assert isinstance(AntennaPort, int),         'The AntennaPort input argument is of invalid type' 
-        assert AntennaPort == 0 or AntennaPort == 1, 'The AntennaPort input argument is invalid'
-        if AntennaPort == 1 and self.ControlInformation.NumberTxAntennas == 1:
-            assert False, 'Attemping to render non-existing antenna port 1 signal'
-
-        ResourceGrid = self.ResourceGrid[:, :, AntennaPort]
-
-        NumberSubcarriers = ResourceGrid.shape[0]
-        NumberOfdmSymbols = ResourceGrid.shape[1]
-
-        # Error Checking
-        assert NumberSubcarriers == self.NumSubcarriers, 'The resource grid is of invalid size'
-
-        # Determine the length of the OFDM modulated information and construct output array
-        OfdmSymbolLength = self.IfftSize + self.CP_Length
-        NumberOfSamples  = NumberOfdmSymbols * OfdmSymbolLength
-
-        # Start the IFFT loop
-        OfdmTxOutput        = np.zeros(NumberOfSamples, np.complex64)
-        IfftInputBuffer     = np.zeros(self.IfftSize, np.complex64)
-        OutputSequenceIndex = 0
-        for l in range(0, NumberOfdmSymbols):                       # l is the OFDM symbol index
-            OfdmSymbol = np.zeros(OfdmSymbolLength, np.complex64)
-
-            # Map the information from the resource grid into the Ifft input buffer
-            IfftInputBuffer[self.PosIfftIndices] = ResourceGrid[self.PosSubcarrierIndices, l]
-            IfftInputBuffer[self.NegIfftIndices] = ResourceGrid[self.NegSubcarrierIndices, l]
-            IfftOutputBuffer                     = np.sqrt(self.IfftSize) * np.fft.ifft(IfftInputBuffer)
-            
-            # plt.figure(1)
-            # plt.subplot(2,1,1)
-            # plt.plot(IfftInputBuffer.real, 'r', IfftInputBuffer.imag, 'b')
-            # plt.title('Ifft Input Buffer')
-            # plt.grid('#cccccc')
-            # plt.tight_layout()
-
-
-            # Fetch the Cyclic Prefix from the end of the IFFT output buffer
-            CyclicPrefix                         = IfftOutputBuffer[-self.CP_Length:]
-            
-            # Place the Cyclic Prefix at the start of the OFDM symbol
-            OfdmSymbol[0:self.CP_Length]         = CyclicPrefix
-            
-            # Place the Ifft Output at the end of the Ofdm Symbol
-            OfdmSymbol[self.CP_Length:]          = IfftOutputBuffer
-
-            # plt.subplot(2,1,2)
-            # plt.plot(OfdmSymbol.real, 'r', OfdmSymbol.imag, 'b')
-            # plt.title('OfdmSymbol')
-            # plt.grid('#cccccc')
-            # plt.tight_layout()
-            # plt.show()
-            
-            # Copy the Ofdm Symbol into the OfdmTxOutput array
-            Scaling                              = np.sqrt(self.IfftSize / self.NumSubcarriers)
-            OfdmTxOutput[OutputSequenceIndex:OutputSequenceIndex+OfdmSymbolLength] = Scaling * OfdmSymbol
-
-            print(np.var(Scaling * IfftOutputBuffer))
-
-            # Increment the OutputSequenceIndex
-            OutputSequenceIndex += OfdmSymbolLength
-
-        return OfdmTxOutput
-
-
-
-
-
-
-
-
 
 
 
@@ -1089,7 +852,8 @@ class CFlexLinkTransmitter():
     #                                                                                                          #
     # -------------------------------------------------------------------------------------------------------- # 
     def BuildTxPacket(self
-                    , strPreambleALength: str  ) -> np.ndarray:
+                    , strPreambleALength: str
+                    , bPlot : bool             ) -> np.ndarray:
         '''
         In this function assumes that the resource grid has already been completely populated and is ready to be transmitted.
         It will generate the preambles. (The strPreambleALength input argument will determine the length of PreambleA)
@@ -1108,20 +872,27 @@ class CFlexLinkTransmitter():
         # ----------------------------------------------
         # Build the AGC Burst
         AgcBurst = Preamble.GenerateAgcBurst(self.SampleRate)
+        # AgcBurst = Preamble.GenerateAgcBurstTest(self.SampleRate, True) # lwd working 
+
         SampleLengthAgcBurst = len(AgcBurst)
 
         # Build the PreambleA
-        PreambleA = Preamble.GeneratePreambleA(self.SampleRate, strPreambleALength)
+        PreambleA = Preamble.GeneratePreambleA(self.SampleRate, 1024, strPreambleALength)
         SampleLengthPreambleA = len(PreambleA)
+        
+        if bPlot:
+            Preamble.DetectPreambleA(PreambleA, 20.0e6, bPlot)
+            Preamble.ProcessPreambleA(PreambleA, 20.0e6, bHighCinr= False, bShowPlots = True)
+            
 
         # Build the PreambleB
-        PreambleB = Preamble.GeneratePreambleB(self.SampleRate)
+        PreambleB, _ = Preamble.GeneratePreambleB(self.SampleRate)
         SampleLengthPreambleB = len(PreambleB)
         
         PreambleLength        = SampleLengthAgcBurst + SampleLengthPreambleA + SampleLengthPreambleB
 
         # Ofdm Modulate the Resource grid from Port 0
-        OfdmTxOutputP0 = self.OfdmModulate(0)
+        OfdmTxOutputP0 = self.OfdmModulate(0, self.ResourceGrid)
 
         # Concatenate all portions of the Tx Waveform for Port 0
         TxOutputP0     = np.hstack((AgcBurst.astype(np.complex64), PreambleA.astype(np.complex64), PreambleB.astype(np.complex64), OfdmTxOutputP0.astype(np.complex64)))
@@ -1129,13 +900,16 @@ class CFlexLinkTransmitter():
         
         # Render the waveform for Port 1 if required
         if self.ControlInformation.NumberTxAntennas == 2:
-            OfdmTxOutputP1 = self.OfdmModulate(1)
+            OfdmTxOutputP1 = self.OfdmModulate(1, self.ResourceGrid)
             assert len(OfdmTxOutputP0) == len(OfdmTxOutputP1), 'The OFDM modulated signals for P0 and P1 must be the same'
             TxOutputP1[PreambleLength:] = OfdmTxOutputP1 
 
         # Therefore the output is a matrix with two rows, where the first tows represents the Tx Waveform for P0, whereas the second row
         # represents the Tx Waveform for P1
         TxOutput = np.vstack([TxOutputP0, TxOutputP1])
+
+        # Indicate that the packet was built
+        self.PacketWasBuild          = True
 
         return TxOutput
 
@@ -1145,98 +919,7 @@ class CFlexLinkTransmitter():
 
 
 
-
-
-
-    # --------------------------------------------------------------------------------------------------------------------------------------- #
-    #                                                                                                                                         #
-    # > Plot the resource grid                                                                                                                #
-    #                                                                                                                                         #                                                                                                    
-    # --------------------------------------------------------------------------------------------------------------------------------------- #
-    def PlotResourceGrid(self
-                       , AntennaPort: int ):
-        '''
-        This function will great a PCOLOR plot of the resource
-        '''
-        assert isinstance(AntennaPort, int),         "The input argument 'AntennaPort' is of invalid type"
-        assert AntennaPort == 0 or AntennaPort == 1, "The input argument 'AntennaPort' is invalid" 
-
-        assert isinstance(self.ResourceGridEnum[:,:, AntennaPort], np.ndarray)
-        NumberSubcarriers, NumberOfdmSymbols = self.ResourceGridEnum[:,:,AntennaPort].shape
-        
-        # Limit the number of OFDM symbols to 25. Otherwise the plot gets to large
-        if NumberOfdmSymbols > 25:
-            NumberOfdmSymbols = 25
-
-        # Please check out how cmap="tab20c" is defined at the following location:
-        # https://matplotlib.org/stable/users/explain/colors/colormaps.html
-        # Our goal here is to recreate a pcolor plot that matches the colors of the resource elements
-        # used in the plots of the FlexLink specification.
-        Z               = np.zeros([NumberSubcarriers, NumberOfdmSymbols], np.float32)
-        for k in range(0, NumberSubcarriers):
-            for l in range(0, NumberOfdmSymbols):
-                Value = self.ResourceGridEnum[k, l, AntennaPort]
-
-                if Value == -1:  # Unknown --> Yellow
-                    Z[k,l] = 0.42
-
-                if Value == 0:   # Empty --> White / Light Grey
-                    Z[k,l] = 1 
-
-                if Value == 1:   # RefSignalPort0 --> Grey
-                    Z[k,l] = 0.90
-
-                if Value == 2:   # RefSignalPort1 --> Red
-                    Z[k,l] = 0.28
-
-                if Value == 3:   # Control information --> Blue
-                    Z[k,l] = 0.08 
-
-                if Value == 4:   # Data --> Yellow
-                    Z[k,l] = 0.42
-
-                if Value == 5:   # Signal Field --> Green
-                    Z[k,l] = 0.5
-
-                if Value == 6:   # PayloadA Even Code Word
-                    Z[k,l] = 0.65
-
-                if Value == 7:   # PayloadA Odd  Code Word --> Blue
-                    Z[k,l] = 0.69
-
-                # Here I have to establish the min and max values of the CMAP. These two resource elements do not
-                # represent any content.
-                if k == NumberSubcarriers-1 and l == NumberOfdmSymbols - 1:
-                    Z[k,l] = 1.0    # This is the maximum color value
-                
-                if k == NumberSubcarriers - 2 and l == NumberOfdmSymbols - 1:
-                    Z[k,l] = 0.08   # This is the minimum color value
-
-        X, Y            = np.mgrid[0:NumberSubcarriers+1:1, 0:NumberOfdmSymbols+1:1]
-
-        fig = plt.figure(1) 
-        plt.pcolor(Y, X, Z, cmap="tab20c", )
-        plt.title('Resource Grid\n\n(Blue - Control / Dark Grey - Ref Signal P0 / Red - Ref Signal P1 / Dark Purple - PayloadA Even CodeWord)\n( Light Purple - PayloadA Odd CodeWord / Orange - Available for Data / Light Gray - Empty = 0+0j)')
-        plt.ylabel('Subcarriers') 
-        plt.xlabel('Ofdm Symbols') 
-        plt.grid(color='#999999') 
-        plt.show()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
+   
 
 
 # ----------------------------------------------------------------------
@@ -1245,9 +928,11 @@ class CFlexLinkTransmitter():
 if __name__ == '__main__':
     
     Test = 0
+    bPlot = False # True 
 
     if Test == 0:
 
+        
         # ----------------------------------------------------------------------------------------------
         # > Construct the CFlexTransmitter object
         # ---------------------------------------------------------------------------------------------- 
@@ -1269,9 +954,9 @@ if __name__ == '__main__':
         # -----------------------------------------------------------------------------------------
         # > Construct the control information object
         # -----------------------------------------------------------------------------------------
-        NumOfdmSymbols = 20
+        NumOfdmSymbols = 20 # 15 # 20
         ControlInfo = CControlInformation(ReferenceSymbolPeriodicityIndex= 3      # 0/1/2/3 - [1, 3,  6, 12]
-                                        , ReferenceSignalSpacingIndex    = 2      # 0/1/2/3 - [3, 6, 12, 24]
+                                        , ReferenceSignalSpacingIndex    = 0 #was:2      # 0/1/2/3 - [3, 6, 12, 24]
                                         , NumSignalFieldSymbolsIndex     = 1      # 0/1/2/3 - [1, 2,  4, 10]
                                         , SignalFieldModulationFlag      = 1      # 0/1     - BPSK / QPSK
                                         , NumberTxAntennaPortFlag        = 1      # 0/1     - 1TX  / 2TX
@@ -1280,16 +965,19 @@ if __name__ == '__main__':
         print(ControlInfo)
 
         # -----------------------------------------------------------------------------------------
-        # > Create and initialize the resource grid with control information and reference signals
+        # > We preinitialize the resource grid here. 
         # -----------------------------------------------------------------------------------------
-        # At this point, the resource grid is built and all control and reference signals are placed within
-        ControlInfo = FlexLinkTransmitter.InitializeResourceGrid(ControlInfo, NumOfdmSymbols)
+        # In fact, we are simply building three arrays that indicate the resource element types for the subcarriers
+        # for the first reference Symbol, the remaining reference symbols and the data symbols.
+        # This call is actually not required, the call to InitializeResourceGrid() below, will automatically do the
+        # PreInitReferenceGrid() procedure.
+        FlexLinkTransmitter.PreInitReferenceGrid(ControlInfo)
 
 
         # -----------------------------------------------------------------------------------------
         # > Define the Signal Field and add it to the resource grid
         # -----------------------------------------------------------------------------------------
-        NumDataBlocks = 20
+        NumDataBlocks = 40
         SignalFieldFormat1 = CSignalField(FEC_Mode   = 1                            # 0/1 - LDPC Coding / Polar Coding
                                         , CBS_A_Flag = 1                            # 0/1/2/3 -> 648/1296/1944/1944 (LDPC) or 256/512/1024/2048 (Polar Coding)
                                         , FEC_A_Flag = 2                            # 0/1/2/3/4/5/6/7 -> 1/2,2/3,3/4,5/6,1/2,1/2,1/2 (LDPC) or 1/4,3/8,1/2,5/8,3/4,7/8,1/4,1/4 (Polar)
@@ -1301,6 +989,12 @@ if __name__ == '__main__':
                                         , Client_Flag           = 0)                # 0/1 -> Point-to-Point / Point-to-Multipoint
         
         print(SignalFieldFormat1)
+
+        # Here we complete build the ResourceGridEnum, which enumerate the type of every resource element withing.
+        # At this point, we may plot the ReosurceGridEnum and the capacity tables for PayloadA are available.
+        FlexLinkTransmitter.InitializeResourceGrid(ControlInfo, SignalFieldFormat1)
+
+
 
         # Add the signal field
         FlexLinkTransmitter.AddSignalField(SignalFieldFormat1)
@@ -1318,7 +1012,7 @@ if __name__ == '__main__':
 
         DataBlockList = []
         for DataBlockIndex in range(0, NumDataBlocks):
-            CurrentDataBlock = np.random.randint(low=0, high=2, size= DataBlockSize, dtype = np.uint8)
+            CurrentDataBlock = np.random.randint(low=0, high=2, size= DataBlockSize, dtype = np.uint16)
             DataBlockList.append(CurrentDataBlock)
 
         FlexLinkTransmitter.AddPayloadA(DataBlockList)
@@ -1329,8 +1023,8 @@ if __name__ == '__main__':
         # ------------------------------------------------------------------------------------------
         # > Build the packet
         # ------------------------------------------------------------------------------------------
-        strPreambleALength = 'short'   # Either 'short' = 50 useconds, or 'long' = 250 useconds
-        Output = FlexLinkTransmitter.BuildTxPacket(strPreambleALength)
+        strPreambleALength = 'long' #'short'   # Either 'short' = 50 useconds, or 'long' = 250 useconds
+        Output = FlexLinkTransmitter.BuildTxPacket(strPreambleALength, bPlot)
 
 
         plt.figure()
@@ -1345,6 +1039,7 @@ if __name__ == '__main__':
         plt.title('IQ Waveform of P1 signal')
         plt.tight_layout()
         plt.show()
+        print('end')
 
 
     # -----------------------------------------------------------------------------------------
